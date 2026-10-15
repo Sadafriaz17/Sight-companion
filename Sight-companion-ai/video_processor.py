@@ -1,5 +1,6 @@
 import cv2
 import threading
+import subprocess
 import numpy as np
 from detector import ObjectDetector
 from depth import DepthEstimator
@@ -10,6 +11,88 @@ from utils import annotate_frame
 
 # Run depth estimation every N frames to save compute (reuse cached map in between)
 DEPTH_EVERY = 3
+
+# Phone webcam app device name keywords (case-insensitive)
+PHONE_CAM_KEYWORDS = ["droidcam", "ivcam", "epoccam", "iriun", "ndis cam", "reincubate"]
+
+
+def _is_phone_cam_installed() -> bool:
+    """Check Windows device list for known phone webcam virtual drivers."""
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "Get-PnpDevice -Class Camera | Select-Object -ExpandProperty FriendlyName"],
+            capture_output=True, text=True, timeout=6
+        )
+        names = result.stdout.lower()
+        return any(kw in names for kw in PHONE_CAM_KEYWORDS)
+    except Exception:
+        return False
+
+
+def auto_detect_camera() -> tuple:
+    """
+    Automatically detect camera source.
+
+    Priority:
+      1. Phone webcam (DroidCam / iVCam / etc.) — tries indices 0-4
+      2. Laptop/PC built-in webcam (index 0) as fallback
+
+    Returns (source_index, backend) ready for cv2.VideoCapture().
+    """
+    backends = [
+        ("DSHOW", cv2.CAP_DSHOW),
+        ("MSMF",  cv2.CAP_MSMF),
+    ]
+
+    phone_installed = _is_phone_cam_installed()
+
+    if phone_installed:
+        print("📱 Phone webcam app detected — scanning for its camera index...")
+
+        # Collect ALL working cameras with their resolutions
+        found = []   # list of (idx, backend_flag, backend_name, width, height)
+        for b_name, b_flag in backends:
+            for idx in range(5):
+                cap = cv2.VideoCapture(idx, b_flag)
+                if cap.isOpened():
+                    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                    cap.release()
+                    # Avoid duplicate entries for same (idx, w, h)
+                    if not any(f[0] == idx and f[2] == w and f[3] == h for f in found):
+                        found.append((idx, b_flag, b_name, w, h))
+                else:
+                    cap.release()
+
+        if len(found) > 1:
+            # More than one camera — pick the one that is NOT the first DSHOW index 0
+            # (laptop cam is almost always DSHOW index 0)
+            laptop_entry = next(
+                (f for f in found if f[0] == 0 and f[2] == "DSHOW"), None
+            )
+            phone_entry = next(
+                (f for f in found if f != laptop_entry), None
+            )
+            if phone_entry:
+                idx, b_flag, b_name, w, h = phone_entry
+                print(f"  ✅ Phone cam found: [{b_name}] index {idx} ({w}x{h})")
+                return idx, b_flag
+
+        elif len(found) == 1:
+            # Only one camera — it IS the phone (no separate laptop cam detected)
+            idx, b_flag, b_name, w, h = found[0]
+            print(f"  ✅ Phone cam is the only camera: [{b_name}] index {idx} ({w}x{h})")
+            return idx, b_flag
+
+        print("  ⚠️  Phone app detected but camera index not found. Falling back to laptop cam.")
+
+    else:
+        print("💻 No phone webcam app detected — using laptop webcam.")
+
+    # Default fallback: laptop/PC webcam
+    return 0, cv2.CAP_DSHOW
+
 
 class PipelineProcessor:
     def __init__(self, run_ocr=True):
@@ -22,8 +105,8 @@ class PipelineProcessor:
 
         # Shared state between AI thread and display thread
         self._lock = threading.Lock()
-        self._latest_frame = None          # most recent raw frame for AI to process
-        self._latest_annotated = None      # latest annotated frame for display
+        self._latest_frame = None
+        self._latest_annotated = None
         self._ai_instructions = []
         self._ai_detections = []
         self._ai_ocr = []
@@ -36,24 +119,20 @@ class PipelineProcessor:
         ocr_frame_count = 0
 
         while not self._stop_event.is_set():
-            # Grab the latest frame safely
             with self._lock:
                 frame = self._latest_frame
 
             if frame is None:
-                continue  # No frame yet, spin
+                continue
 
             depth_frame_count += 1
             ocr_frame_count += 1
 
-            # --- Object Detection (every frame) ---
             detections = self.detector.detect(frame)
 
-            # --- Depth Estimation (every DEPTH_EVERY frames, cached otherwise) ---
             if cached_depth is None or depth_frame_count % DEPTH_EVERY == 0:
                 cached_depth = self.depth_estimator.estimate(frame)
 
-            # --- OCR (every frame_skip frames) ---
             ocr_results = []
             if self.ocr_reader and (ocr_frame_count % frame_skip == 0):
                 try:
@@ -61,12 +140,10 @@ class PipelineProcessor:
                 except Exception:
                     pass
 
-            # --- Navigation ---
             instructions = self.nav_engine.evaluate(detections, cached_depth, ocr_results, width)
             if instructions:
                 self.speech.speak(instructions[0])
 
-            # --- Annotate & push result for display ---
             annotated = annotate_frame(frame, detections, ocr_results, instructions)
             with self._lock:
                 self._latest_annotated = annotated
@@ -74,20 +151,28 @@ class PipelineProcessor:
                 self._ai_ocr = ocr_results
                 self._ai_instructions = instructions
 
-    def process_video(self, source_path=0, output_path="output.mp4", frame_skip=5):
-        # Use DirectShow backend for integer indices (webcam / DroidCam virtual driver).
-        # For URLs (IP Webcam RTSP/HTTP) use the default backend.
-        if isinstance(source_path, int):
-            cap = cv2.VideoCapture(source_path, cv2.CAP_MSMF)
+    def process_video(self, source_path="auto", output_path="output.mp4", frame_skip=5):
+        # ── Camera selection ──────────────────────────────────────────────────
+        if source_path == "auto":
+            cam_index, cam_backend = auto_detect_camera()
+            cap = cv2.VideoCapture(cam_index, cam_backend)
+        elif isinstance(source_path, int):
+            # Explicit integer index — try DSHOW first, fallback to MSMF
+            cap = cv2.VideoCapture(source_path, cv2.CAP_DSHOW)
+            if not cap.isOpened():
+                cap = cv2.VideoCapture(source_path, cv2.CAP_MSMF)
         else:
+            # String path / URL (e.g., RTSP stream from IP Webcam)
             cap = cv2.VideoCapture(source_path)
+
         if not cap.isOpened():
             print(f"Error: Could not open video source '{source_path}'.")
             return
 
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        fps = int(cap.get(cv2.CAP_PROP_FPS)) or 30
+        fps    = int(cap.get(cv2.CAP_PROP_FPS)) or 30
+        print(f"Camera opened: {width}x{height} @ {fps}fps")
 
         writer = None
         if output_path:
@@ -107,7 +192,7 @@ class PipelineProcessor:
         cv2.putText(blank, "Loading AI models...", (30, height // 2),
                     cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
 
-        print("Processing video frames...")
+        print("Processing video frames... (press Q in window to quit)")
         while cap.isOpened():
             ret, frame = cap.read()
             if not ret:
@@ -115,12 +200,10 @@ class PipelineProcessor:
 
             frame_count += 1
 
-            # Push latest raw frame to AI thread
             with self._lock:
                 self._latest_frame = frame.copy()
                 annotated = self._latest_annotated
 
-            # Display: use latest annotated result (or loading screen initially)
             display = annotated if annotated is not None else blank
             cv2.imshow("AI Assistive Vision", display)
 
