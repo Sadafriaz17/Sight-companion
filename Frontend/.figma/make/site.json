@@ -1,0 +1,10 @@
+{
+  "description": "Create stunning moodboards effortlessly with a drag-and-drop interface and customizable color palette generator, perfect for designers and creatives.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}

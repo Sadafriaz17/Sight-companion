@@ -32,7 +32,7 @@ The backend is the part of Sight Companion that sees and speaks. It reads the ca
 | speech.py | Speaks warnings and handles voice questions |
 | ocr.py | Reads text with EasyOCR (optional) |
 | utils.py | Draws boxes and the text bar on screen |
-| requirements.txt | Packages to install |
+| requirements.txt | All packages to install (one file at the project root) |
 
 ---
 
@@ -61,28 +61,20 @@ conda create -n sight-companion python=3.10 -y
 conda activate sight-companion
 ```
 
-3. Install PyTorch.
-
-Most laptops:
-
-```
-pip install torch torchvision torchaudio
-```
-
-With an NVIDIA graphics card:
-
-```
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-```
-
-The right choice depends on your card and driver. If it does not match, check the official PyTorch install guide.
-
-4. Install the other packages:
+3. Install all packages from the project root:
 
 ```
 pip install -r requirements.txt
-pip install SpeechRecognition vosk pyaudio
 ```
+
+If you have an NVIDIA graphics card and want the CUDA build of PyTorch, install torch separately first:
+
+```
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+pip install -r requirements.txt
+```
+
+The right CUDA version depends on your card and driver. Check the official PyTorch install guide if unsure.
 
 If pyaudio fails on Windows:
 
@@ -175,6 +167,8 @@ run_ocr = False
 conda activate sight-companion
 pip install -r requirements.txt
 ```
+
+Run this command from the project root (the folder that contains the Backend and Sight-companion-ai folders).
 
 ---
 
