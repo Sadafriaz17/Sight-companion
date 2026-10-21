@@ -1,0 +1,14 @@
+# ── Backend (Flask API) ───────────────────────────────────────────────────────
+flask>=3.0.0
+flask-cors>=4.0.0
+
+# ── AI pipeline (YOLOv8 · Depth · OCR · Speech) ──────────────────────────────
+ultralytics>=8.0.0
+transformers>=4.36.0
+easyocr>=1.7.0
+torch
+torchvision
+opencv-python-headless
+pillow
+numpy
+pyttsx3
