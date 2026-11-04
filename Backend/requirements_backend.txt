@@ -1,0 +1,9 @@
+# Backend-specific Python dependencies
+# Install ONLY these — all AI deps (torch, ultralytics, transformers, easyocr,
+# opencv, etc.) are already in Sight-companion-ai/venv/
+#
+# Usage (with the AI venv already activated):
+#   pip install -r Backend/requirements_backend.txt
+
+flask>=3.1.0
+flask-cors>=6.0.0
