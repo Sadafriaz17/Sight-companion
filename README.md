@@ -121,7 +121,7 @@ This starts the web dashboard.
 
 ```
 cd Frontend
-copy .env.example .env
+copy ..\.env.example .env
 npm install
 npm run dev
 ```

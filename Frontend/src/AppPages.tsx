@@ -1,23 +1,23 @@
 /**
- * AppPages.tsx — authenticated in-app pages
+ * AppPages.tsx â€” authenticated in-app pages
  *
  * LivePage architecture change
  * ----------------------------
  * The Python backend owns the physical camera (via OpenCV + YOLO).
  * The browser does NOT call getUserMedia() for the live feed.
  * Instead, LivePage:
- *   1. POSTs /api/camera/start  → backend opens the camera + AI pipeline
- *   2. Displays  <img src={STREAM_URL}>  → backend MJPEG stream
+ *   1. POSTs /api/camera/start  â†’ backend opens the camera + AI pipeline
+ *   2. Displays  <img src={STREAM_URL}>  â†’ backend MJPEG stream
  *   3. Polls     /api/detections  every 2 s for structured results
  *   4. POSTs /api/camera/stop   when the user turns the camera off
  *
  * This avoids the "Camera access is blocked" error that occurred when both
  * the browser AND the Python process tried to open the same webcam.
  */
-
-import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react"
+import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react"
 import {
-  STREAM_URL,
+  streamUrl,
+  getApiBase,
   startCamera,
   stopCamera,
   getDetectionResults,
@@ -25,18 +25,17 @@ import {
   triggerOcrRead,
   toggleSpeech,
   speakText,
-  getActivity,
+  getActivityHistory,
+  getOcrHistory,
   getBackendStatus,
+  type BackendStatus,
   type DetectionResult,
-  type ActivityItem,
   type OcrResult,
 } from "./api"
 import { type Preferences } from "./accessibility"
 import { speak, stopSpeaking } from "./voice"
 import { PageLumi, goTo } from "./Pages"
-
-// ─── Shared icon component ───────────────────────────────────────────────────
-
+// â”€â”€â”€ Shared icon component â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 type IconName = "camera" | "mic" | "volume" | "stop" | "copy" | "search" | "shield" | "alert" | "check" | "ocr" | "refresh"
 function AppIcon({ name }: { name: IconName }) {
   const paths: Record<IconName, React.ReactNode> = {
@@ -54,48 +53,75 @@ function AppIcon({ name }: { name: IconName }) {
   }
   return <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">{paths[name]}</svg>
 }
-
 function PageHead({ title, copy, mood = "happy" }: { title: string; copy: string; mood?: "happy" | "alert" | "listening" | "proud" }) {
   useEffect(() => speak(title), [title])
   return <header className="tool-head"><div><p className="eyebrow">SIGHT COMPANION</p><h1>{title}</h1><p>{copy}</p></div><PageLumi mood={mood} /></header>
 }
-
-// ─── LivePage ────────────────────────────────────────────────────────────────
-
-type CamState = "off" | "starting" | "ready" | "error" | "backend-down"
+// â”€â”€â”€ LivePage â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+type CamState = "checking" | "backend-down" | "off" | "starting" | "ready" | "error"
 
 export function LivePage() {
   const imgRef = useRef<HTMLImageElement>(null)
-  const [camState, setCamState] = useState<CamState>("off")
-  const [camError, setCamError]  = useState<string>("")
+  const [camState, setCamState] = useState<CamState>("checking")
+  const [camError, setCamError] = useState("")
   const [backendUp, setBackendUp] = useState<boolean | null>(null)
+  const [streamError, setStreamError] = useState("")
+  const [streamKey, setStreamKey] = useState(0)
 
-  // Detections
+  const camStateRef = useRef<CamState>("checking")
+  const startingRef = useRef(false)
+  useEffect(() => { camStateRef.current = camState }, [camState])
+
   const [detections, setDetections] = useState<DetectionResult[]>(getDetectionResultsSync())
   const [loadingDet, setLoadingDet] = useState(false)
-
-  // OCR
   const [ocrResults, setOcrResults] = useState<OcrResult[]>([])
   const [ocrLoading, setOcrLoading] = useState(false)
-  const [ocrError, setOcrError]     = useState("")
-
-  // Speech
+  const [ocrError, setOcrError] = useState("")
   const [speechOn, setSpeechOn] = useState(true)
 
-  // ── Check backend availability on mount & periodically ────────────────────
-  useEffect(() => {
-    let cancelled = false
-    const check = () => {
-      getBackendStatus().then((s) => {
-        if (!cancelled) setBackendUp(s !== null)
-      })
+  const applyStatus = useCallback((s: BackendStatus | null) => {
+    if (!s) {
+      setBackendUp(false)
+      if (camStateRef.current !== "ready" && camStateRef.current !== "starting") {
+        setCamState("backend-down")
+      }
+      return
     }
-    check()
-    const interval = setInterval(check, 3000)
-    return () => { cancelled = true; clearInterval(interval) }
+    setBackendUp(true)
+    setSpeechOn(s.speech?.enabled ?? true)
+    const cam = s.camera
+    if (camStateRef.current === "starting") return
+    if (cam?.running) {
+      if (camStateRef.current !== "ready") {
+        setStreamKey(Date.now())
+        setStreamError("")
+        setCamState("ready")
+      }
+      return
+    }
+    if (cam?.error) {
+      setCamError(cam.error)
+      setCamState("error")
+      return
+    }
+    if (camStateRef.current === "ready") {
+      setCamState("off")
+    } else if (camStateRef.current === "checking" || camStateRef.current === "backend-down") {
+      setCamState("off")
+    }
   }, [])
 
-  // ── Poll detections while camera is running ───────────────────────────────
+  useEffect(() => {
+    let cancelled = false
+    const check = async () => {
+      const s = await getBackendStatus()
+      if (!cancelled) applyStatus(s)
+    }
+    void check()
+    const interval = setInterval(() => { void check() }, 3000)
+    return () => { cancelled = true; clearInterval(interval) }
+  }, [applyStatus])
+
   useEffect(() => {
     if (camState !== "ready") return
     let cancelled = false
@@ -108,32 +134,91 @@ export function LivePage() {
       }
     }
     void poll()
-    const iv = window.setInterval(() => void poll(), 2000)
+    const iv = window.setInterval(() => { void poll() }, 2000)
     return () => { cancelled = true; clearInterval(iv) }
   }, [camState])
 
-  // ── Camera controls ───────────────────────────────────────────────────────
+  useEffect(() => {
+    return () => {
+      if (camStateRef.current === "ready" || camStateRef.current === "starting") {
+        void stopCamera()
+      }
+    }
+  }, [])
+
   const handleStartCamera = async () => {
+    if (startingRef.current) return
+    startingRef.current = true
     setCamState("starting")
     setCamError("")
+    setStreamError("")
+
+    const pre = await getBackendStatus()
+    if (!pre) {
+      setBackendUp(false)
+      setCamState("backend-down")
+      startingRef.current = false
+      return
+    }
+    setBackendUp(true)
+
     const res = await startCamera()
-    if (res.ok) {
-      // Give the backend ~1 s to open the camera before the stream img loads
-      await new Promise<void>((r) => setTimeout(r, 1000))
+    if (!res.ok) {
+      setCamError(res.error || res.message || "Camera start request failed.")
+      if (res.message === "Backend unreachable.") setCamState("backend-down")
+      else setCamState("error")
+      startingRef.current = false
+      return
+    }
+
+    const deadline = Date.now() + 60000
+    while (Date.now() < deadline) {
+      await new Promise<void>((r) => setTimeout(r, 1200))
+      const s = await getBackendStatus()
+      if (!s) {
+        setBackendUp(false)
+        setCamError("Lost connection to backend while starting the camera.")
+        setCamState("error")
+        startingRef.current = false
+        return
+      }
+      setBackendUp(true)
+      if (s.camera?.error) {
+        setCamError(s.camera.error)
+        setCamState("error")
+        startingRef.current = false
+        return
+      }
+      if (s.camera?.running) {
+        setStreamKey(Date.now())
+        setCamState("ready")
+        startingRef.current = false
+        return
+      }
+    }
+    const lastStatus = await getBackendStatus()
+    if (lastStatus?.camera?.running) {
+      setStreamKey(Date.now())
       setCamState("ready")
+    } else if (lastStatus?.camera?.error) {
+      setCamError(lastStatus.camera.error)
+      setCamState("error")
     } else {
-      setCamError(res.message ?? "Failed to start camera.")
+      setCamError("Camera did not report ready in time. The backend may still be loading AI models; check the backend terminal and try again.")
       setCamState("error")
     }
+    startingRef.current = false
   }
 
   const handleStopCamera = async () => {
+    startingRef.current = false
     await stopCamera()
     setDetections([])
+    setOcrResults([])
+    setStreamError("")
     setCamState("off")
   }
 
-  // ── OCR ──────────────────────────────────────────────────────────────────
   const handleOcrRead = async () => {
     setOcrLoading(true)
     setOcrError("")
@@ -147,34 +232,29 @@ export function LivePage() {
     }
   }
 
-  // ── Speech toggle ─────────────────────────────────────────────────────────
   const handleSpeechToggle = async () => {
     const res = await toggleSpeech()
     setSpeechOn(res.speech_enabled)
   }
 
-  // ── Derived UI values ─────────────────────────────────────────────────────
   const last = detections[0]?.message ?? "No objects detected."
 
-  // ── Status messages ───────────────────────────────────────────────────────
   const stateLabel: Record<CamState, string> = {
-    off:           "Camera is off",
-    starting:      "Starting AI pipeline…",
-    ready:         "Live",
-    error:         "Camera error",
+    checking: "Checking backend\u2026",
     "backend-down": "Backend not reachable",
+    off: "Camera is off",
+    starting: "Starting camera\u2026",
+    ready: "Live",
+    error: "Camera error",
   }
-
   const stateHint: Record<CamState, string> = {
-    off:           backendUp === false
-                    ? "The Python backend is not running. See the README for start instructions."
-                    : "The AI processes your camera on this machine. Frames are never uploaded.",
-    starting:      "Loading YOLO and depth models. This may take 10–30 seconds on first run.",
-    ready:         "",
-    error:         camError || "Check that no other app is using the camera.",
-    "backend-down": "Start the backend with: python Backend/app.py",
+    checking: `Contacting ${getApiBase()}\u2026`,
+    "backend-down": `Cannot reach ${getApiBase()}. Start the Flask backend, then connect again.`,
+    off: backendUp ? "Backend connected. The AI processes your camera on this machine. Frames are never uploaded." : `Contacting ${getApiBase()}\u2026`,
+    starting: "Opening the camera and loading AI models. This can take 10\u201330 seconds on first run.",
+    ready: streamError || "",
+    error: camError || "The camera could not start. Check the backend terminal and camera permissions.",
   }
-
   return (
     <div className="page tool-page">
       <PageHead
@@ -182,151 +262,93 @@ export function LivePage() {
         copy="Lumi sees through your camera and speaks what is nearby."
         mood={camState === "ready" ? "listening" : "happy"}
       />
-
       <div className="live-new-grid">
-
-        {/* ── Camera panel ─────────────────────────────────────────────── */}
         <section className="new-card camera-new">
           <div className="camera-new-top">
             <strong>AI Camera</strong>
-            {camState === "ready" && (
-              <span className="live-status">Live</span>
-            )}
-            {loadingDet && camState === "ready" && (
-              <span style={{ fontSize: "0.75rem", opacity: 0.6 }}>updating…</span>
-            )}
+            {camState === "ready" && <span className="live-status">Live</span>}
+            {loadingDet && camState === "ready" && <span style={{ fontSize: "0.75rem", opacity: 0.6 }}>updating…</span>}
+            {backendUp && camState !== "ready" && <span style={{ fontSize: "0.75rem", opacity: 0.7 }}>Backend connected</span>}
           </div>
-
           <div className="real-camera">
-            {/* MJPEG stream from the Python backend */}
             {camState === "ready" && (
               <img
                 ref={imgRef}
                 id="live-stream"
-                src={STREAM_URL}
+                src={`${streamUrl()}?t=${streamKey}`}
                 alt="Live annotated camera feed from AI backend"
                 style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                onError={() => setStreamError("Live stream interrupted. The backend is still connected; retry the camera if needed.")}
+                onLoad={() => setStreamError("")}
               />
             )}
-
-            {/* Overlay shown when camera is off / loading / errored */}
             {camState !== "ready" && (
               <div className="camera-state" role="status">
                 <AppIcon name="camera" />
                 <h2>{stateLabel[camState]}</h2>
                 <p>{stateHint[camState]}</p>
-                {(camState === "off" || camState === "error") && backendUp !== false && (
-                  <button
-                    id="btn-start-camera"
-                    className="primary-button"
-                    onClick={() => void handleStartCamera()}
-                  >
+                {(camState === "off" || camState === "error") && backendUp && (
+                  <button id="btn-start-camera" className="primary-button" disabled={startingRef.current} onClick={() => void handleStartCamera()}>
                     {camState === "error" ? "Try again" : "Start AI camera"}
                   </button>
                 )}
                 {camState === "starting" && (
-                  <p style={{ marginTop: "0.5rem", opacity: 0.7, fontSize: "0.85rem" }}>
-                    Loading AI models into memory…
-                  </p>
+                  <p style={{ marginTop: "0.5rem", opacity: 0.7, fontSize: "0.85rem" }}>Waiting for camera to report ready…</p>
                 )}
-                {backendUp === false && (
+                {camState === "backend-down" && (
                   <div style={{ marginTop: "0.75rem", display: "flex", flexDirection: "column", gap: "0.5rem", alignItems: "center" }}>
                     <code style={{ fontSize: "0.8rem", opacity: 0.85, padding: "0.35rem 0.6rem", background: "rgba(0,0,0,0.3)", borderRadius: "6px" }}>
-                      .\Sight-companion-ai\venv\Scripts\python.exe Backend\app.py
+                      cd D:\Sight_Companion; .\venv\Scripts\Activate.ps1; cd Backend; python app.py
                     </code>
-                    <button
-                      className="primary-button"
-                      style={{ fontSize: "0.85rem", padding: "0.35rem 0.9rem", marginTop: "0.25rem" }}
-                      onClick={() => {
-                        getBackendStatus().then((s) => {
-                          setBackendUp(s !== null)
-                          if (s !== null) handleStartCamera()
-                        })
-                      }}
-                    >
-                      Connect & Start
+                    <button className="primary-button" style={{ fontSize: "0.85rem", padding: "0.35rem 0.9rem" }}
+                      onClick={async () => {
+                        setCamState("checking")
+                        const s = await getBackendStatus()
+                        if (s) { setBackendUp(true); applyStatus(s) } else { setBackendUp(false); setCamState("backend-down") }
+                      }}>
+                      Retry connection
                     </button>
                   </div>
+                )}
+                {camState === "checking" && (
+                  <p style={{ marginTop: "0.5rem", opacity: 0.7, fontSize: "0.85rem" }}>Checking API…</p>
                 )}
               </div>
             )}
           </div>
-
-          {/* Action row */}
           <div className="camera-action-row">
             {camState === "ready" ? (
-              <button
-                id="btn-stop-camera"
-                className="secondary-button"
-                onClick={() => void handleStopCamera()}
-              >
-                Turn camera off
-              </button>
+              <button id="btn-stop-camera" className="secondary-button" onClick={() => void handleStopCamera()}>Turn camera off</button>
             ) : null}
-
-            <button
-              id="btn-speech-toggle"
-              className="secondary-button"
-              onClick={() => void handleSpeechToggle()}
-              title={speechOn ? "Mute backend voice" : "Unmute backend voice"}
-            >
-              <AppIcon name="volume" />
-              {speechOn ? "Mute" : "Unmute"}
+            <button id="btn-speech-toggle" className="secondary-button" onClick={() => void handleSpeechToggle()} title={speechOn ? "Mute backend voice" : "Unmute backend voice"}>
+              <AppIcon name="volume" /> {speechOn ? "Mute" : "Unmute"}
             </button>
           </div>
         </section>
 
-        {/* ── Detection / OCR panel ────────────────────────────────────── */}
         <aside className="new-card detection-panel">
           <p className="eyebrow">WHAT LUMI SEES</p>
-
-          {/* Latest alert banner */}
           <div className="danger-banner">
             <AppIcon name="alert" />
-            <div>
-              <strong>Guidance</strong>
-              <p>{last}</p>
-            </div>
+            <div><strong>Guidance</strong><p>{last}</p></div>
           </div>
-
-          {/* Detections list */}
           {detections.length > 0 ? (
             detections.map((item) => (
               <article className={`result-row ${item.level}`} key={item.label + item.direction}>
                 <span>{item.level === "safe" ? "Safe" : item.level === "danger" ? "Danger" : "Careful"}</span>
-                <div>
-                  <strong>{item.label}</strong>
-                  <p>{item.direction}</p>
-                </div>
+                <div><strong>{item.label}</strong><p>{item.direction}</p></div>
                 <b>{item.distance !== "N/A" ? item.distance : ""}</b>
               </article>
             ))
           ) : (
-            <div className="empty-inline">
-              {camState === "ready"
-                ? "No objects detected. Move camera slowly."
-                : "Start the camera to see detections."}
-            </div>
+            <div className="empty-inline">{camState === "ready" ? "No objects detected. Move camera slowly." : "Start the camera to see detections."}</div>
           )}
-
-          {/* OCR section */}
           <div style={{ marginTop: "1rem", borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: "1rem" }}>
             <p className="eyebrow" style={{ marginBottom: "0.5rem" }}>TEXT RECOGNITION (OCR)</p>
-            <button
-              id="btn-ocr-read"
-              className="secondary-button"
-              onClick={() => void handleOcrRead()}
-              disabled={ocrLoading || camState !== "ready"}
-              style={{ marginBottom: "0.5rem" }}
-            >
-              <AppIcon name="ocr" />
-              {ocrLoading ? "Reading…" : "Read text in frame"}
+            <button id="btn-ocr-read" className="secondary-button" onClick={() => void handleOcrRead()} disabled={ocrLoading || camState !== "ready"} style={{ marginBottom: "0.5rem" }}>
+              <AppIcon name="ocr" /> {ocrLoading ? "Reading…" : "Read text in frame"}
             </button>
-            {ocrError && (
-              <p role="alert" style={{ fontSize: "0.8rem", color: "var(--color-careful, #e07b39)", margin: "0.25rem 0" }}>
-                {ocrError}
-              </p>
-            )}
+            {ocrError && <p role="alert" style={{ fontSize: "0.8rem", color: "var(--color-careful, #e07b39)", margin: "0.25rem 0" }}>{ocrError}</p>}
             {ocrResults.length > 0 && (
               <ul style={{ listStyle: "none", padding: 0, margin: "0.5rem 0 0" }}>
                 {ocrResults.map((r, i) => (
@@ -337,19 +359,11 @@ export function LivePage() {
               </ul>
             )}
           </div>
-
-          {/* Speech controls */}
           <div className="speech-controls" style={{ marginTop: "1rem" }}>
-            <button
-              id="btn-speak-last"
-              onClick={() => void speakText(last)}
-              disabled={camState !== "ready"}
-            >
+            <button id="btn-speak-last" onClick={() => { void speakText(last).catch(() => {}); speak(last, true) }} disabled={camState !== "ready"}>
               <AppIcon name="volume" /> Repeat guidance
             </button>
-            <button id="btn-stop-speech" onClick={stopSpeaking}>
-              <AppIcon name="stop" /> Stop
-            </button>
+            <button id="btn-stop-speech" onClick={stopSpeaking}><AppIcon name="stop" /> Stop</button>
           </div>
         </aside>
       </div>
@@ -357,37 +371,30 @@ export function LivePage() {
   )
 }
 
-// ─── AskPage ─────────────────────────────────────────────────────────────────
-
+// â”€â”€â”€ AskPage â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 type Chat = { from: "you" | "lumi"; text: string }
 const chatKey = "sight-companion:chats"
-
 export function AskLumiPage() {
   const [messages, setMessages] = useState<Chat[]>(() => {
     try { return JSON.parse(localStorage.getItem(chatKey) || "[]") } catch { return [] }
   })
   const [text, setText] = useState("")
   const [status, setStatus] = useState<"ready" | "listening" | "thinking" | "speaking">("ready")
-
   const add = (msg: Chat) => setMessages((prev) => {
     const next = [...prev, msg]
     localStorage.setItem(chatKey, JSON.stringify(next.slice(-40)))
     return next
   })
-
   const ask = async (q = text.trim()) => {
     if (!q) return
     add({ from: "you", text: q })
     setText("")
     setStatus("thinking")
-
     // Simple rule-based replies using actual detection data
     let reply = "I'm not sure. Try pointing the camera at the area."
-
     // Fetch latest detections for context-aware replies
     const dets = await getDetectionResults()
     const ql = q.toLowerCase()
-
     if (ql.includes("front") || ql.includes("ahead") || ql.includes("see")) {
       if (dets.length === 0) reply = "I can't see anything right now. Make sure the camera is on."
       else reply = `I can see: ${dets.map((d) => `${d.label} ${d.direction}`).join(", ")}.`
@@ -398,28 +405,27 @@ export function AskLumiPage() {
     } else if (ql.includes("safe") || ql.includes("walk")) {
       const dangerous = dets.filter((d) => d.level === "danger" || d.level === "careful")
       if (dangerous.length === 0) reply = "The path looks clear. Walk with care."
-      else reply = `Careful — I can see ${dangerous.map((d) => d.label + " " + d.direction).join(", ")}.`
+      else reply = `Careful - I can see ${dangerous.map((d) => d.label + " " + d.direction).join(", ")}.`
     }
-
     setStatus("speaking")
     add({ from: "lumi", text: reply })
     speak(reply)
     await new Promise<void>((r) => setTimeout(r, 1200))
     setStatus("ready")
   }
-
   const listen = () => {
-    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+    type SRConstructor = new () => { lang: string; onstart: (() => void) | null; onresult: ((e: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null; onerror: (() => void) | null; onend: (() => void) | null; start: () => void }
+    const w = window as unknown as { SpeechRecognition?: SRConstructor; webkitSpeechRecognition?: SRConstructor }
+    const SR = w.SpeechRecognition || w.webkitSpeechRecognition
     if (!SR) { alert("Speech recognition is not supported in this browser. Please type your question."); return }
     const rec = new SR()
     rec.lang = "en-US"
     rec.onstart = () => setStatus("listening")
-    rec.onresult = (e: any) => { const t = e.results[0][0].transcript; setText(t); void ask(t) }
+    rec.onresult = (e) => { const t = e.results[0][0].transcript; setText(t); void ask(t) }
     rec.onerror = () => setStatus("ready")
     rec.onend = () => { if (status === "listening") setStatus("ready") }
     rec.start()
   }
-
   return (
     <div className="page tool-page">
       <PageHead title="Ask Lumi" copy="Ask a question with your voice or type it below." mood="listening" />
@@ -458,14 +464,22 @@ export function AskLumiPage() {
   )
 }
 export { AskLumiPage as AskPage }
-
-// ─── SignsPage ────────────────────────────────────────────────────────────────
-
+// â”€â”€â”€ SignsPage â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 export function SignsPage() {
   const [query, setQuery] = useState("")
   const [ocrItems, setOcrItems] = useState<string[]>([])
   const [loading, setLoading] = useState(false)
-
+  useEffect(() => {
+    let cancelled = false
+    getOcrHistory()
+      .then((data) => {
+        if (!cancelled && data.length > 0) {
+          setOcrItems(data.map((r: any) => r.text).slice(0, 20))
+        }
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [])
   const refresh = async () => {
     setLoading(true)
     const res = await triggerOcrRead()
@@ -477,9 +491,7 @@ export function SignsPage() {
     }
     setLoading(false)
   }
-
   const filtered = ocrItems.filter((item) => item.toLowerCase().includes(query.toLowerCase()))
-
   return (
     <div className="page tool-page">
       <PageHead title="Signs" copy="Find text Lumi has read for you." />
@@ -515,14 +527,11 @@ export function SignsPage() {
     </div>
   )
 }
-
-// ─── SafetyPage ───────────────────────────────────────────────────────────────
-
+// â”€â”€â”€ SafetyPage â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 export function SafetyPage() {
   const [sound, setSound] = useState(true)
   const [vibrate, setVibrate] = useState(true)
   const [sensitivity, setSensitivity] = useState(2)
-
   const test = () => {
     speak("Danger. An object is very close.", true)
     if (sound) {
@@ -534,7 +543,6 @@ export function SafetyPage() {
     }
     if (vibrate) navigator.vibrate?.([180, 80, 180])
   }
-
   return (
     <div className="page tool-page">
       <PageHead title="Safety" copy="Choose how Lumi warns you when something is close." mood="alert" />
@@ -581,30 +589,27 @@ export function SafetyPage() {
     </div>
   )
 }
-
-// ─── ActivityPage ─────────────────────────────────────────────────────────────
-
+// â”€â”€â”€ ActivityPage â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 export function ActivityPage() {
-  const [items, setItems] = useState<ActivityItem[]>([])
+  const [items, setItems] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
-
   useEffect(() => {
     let cancelled = false
     setLoading(true)
-    getActivity()
+    getActivityHistory()
       .then((data) => { if (!cancelled) { setItems(data); setLoading(false) } })
       .catch(() => { if (!cancelled) { setError(true); setLoading(false) } })
     return () => { cancelled = true }
   }, [])
-
-  const typeLabel: Record<ActivityItem["type"], string> = {
+  const typeLabel: Record<string, string> = {
     object: "Careful",
     sign: "Sign",
     safe: "Safe",
     session: "Session",
+    settings: "Settings",
+    auth: "Auth",
   }
-
   return (
     <div className="page tool-page">
       <PageHead title="Activity" copy="Review recent sessions, signs, and safety alerts." mood="proud" />
@@ -615,12 +620,12 @@ export function ActivityPage() {
             Could not load activity right now. Please try again later.
           </p>
         )}
-        {!loading && !error && items.map((item) => (
-          <article key={item.id}>
-            <span>{typeLabel[item.type]}</span>
+        {!loading && !error && items.map((item, index) => (
+          <article key={item.id || index}>
+            <span>{typeLabel[item.type] || item.type}</span>
             <div>
               <h2>{item.title}</h2>
-              <p>{item.time}</p>
+              <p>{item.created_at || item.time || "Just now"}</p>
             </div>
           </article>
         ))}
@@ -631,10 +636,8 @@ export function ActivityPage() {
     </div>
   )
 }
-
-// ─── SettingsPage ─────────────────────────────────────────────────────────────
-
-export function SettingsPage({ preferences, setPreferences }: { preferences: Preferences; setPreferences: Dispatch<SetStateAction<Preferences>> }) {
+// â”€â”€â”€ SettingsPage â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+export function SettingsPage({ preferences, setPreferences, loading }: { preferences: Preferences; setPreferences: Dispatch<SetStateAction<Preferences>>; loading?: boolean }) {
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([])
   useEffect(() => {
     const load = () => setVoices(speechSynthesis.getVoices())
@@ -644,46 +647,49 @@ export function SettingsPage({ preferences, setPreferences }: { preferences: Pre
   }, [])
   const update = <K extends keyof Preferences>(key: K, value: Preferences[K]) =>
     setPreferences((old) => ({ ...old, [key]: value }))
-
   return (
     <div className="page tool-page">
       <PageHead title="Settings" copy="Make Sight Companion comfortable for you." />
-      <div className="settings-layout">
-        <section className="new-card settings-form">
-          <h2>Voice</h2>
-          <label className="choice-row">
-            <span><strong>Voice guidance</strong><small>Speak messages and page titles.</small></span>
-            <input type="checkbox" checked={preferences.voiceOn} onChange={(e) => update("voiceOn", e.target.checked)} />
-          </label>
-          <label>Voice choice
-            <select value={preferences.voice} onChange={(e) => update("voice", e.target.value)}>
-              <option value="">Device default</option>
-              {voices.map((voice) => <option key={voice.name}>{voice.name}</option>)}
-            </select>
-          </label>
-          <label>Voice speed: {preferences.rate.toFixed(1)}
-            <input type="range" min=".5" max="2" step=".1" value={preferences.rate} onChange={(e) => update("rate", Number(e.target.value))} />
-          </label>
-          <label>Voice volume: {Math.round(preferences.volume * 100)}%
-            <input type="range" min="0" max="1" step=".1" value={preferences.volume} onChange={(e) => update("volume", Number(e.target.value))} />
-          </label>
-          <button className="secondary-button" onClick={() => speak("Hello, I'm Lumi. This is how I sound.", true)}>Preview voice</button>
-        </section>
-        <section className="new-card settings-form">
-          <h2>Display and movement</h2>
-          <label className="choice-row">
-            <span><strong>High contrast</strong><small>Make text and borders stronger.</small></span>
-            <input type="checkbox" checked={preferences.contrast} onChange={(e) => update("contrast", e.target.checked)} />
-          </label>
-          <label>Text size: {["Standard", "Large", "Extra large"][preferences.textSize - 1]}
-            <input type="range" min="1" max="3" value={preferences.textSize} onChange={(e) => update("textSize", Number(e.target.value))} />
-          </label>
-          <label className="choice-row">
-            <span><strong>Reduced motion</strong><small>Remove moving effects.</small></span>
-            <input type="checkbox" checked={preferences.reducedMotion} onChange={(e) => update("reducedMotion", e.target.checked)} />
-          </label>
-        </section>
-      </div>
+      {loading && <p role="status" style={{ padding: "1rem", opacity: 0.6 }}>Loading settings…</p>}
+      {!loading && (
+        <div className="settings-layout">
+          <section className="new-card settings-form">
+            <h2>Voice</h2>
+            <label className="choice-row">
+              <span><strong>Voice guidance</strong><small>Speak messages and page titles.</small></span>
+              <input type="checkbox" checked={preferences.voiceOn} onChange={(e) => update("voiceOn", e.target.checked)} />
+            </label>
+            <label>Voice choice
+              <select value={preferences.voice} onChange={(e) => update("voice", e.target.value)}>
+                <option value="">Device default</option>
+                {voices.map((voice) => <option key={voice.name}>{voice.name}</option>)}
+              </select>
+            </label>
+            <label>Voice speed: {preferences.rate.toFixed(1)}
+              <input type="range" min=".5" max="2" step=".1" value={preferences.rate} onChange={(e) => update("rate", Number(e.target.value))} />
+            </label>
+            <label>Voice volume: {Math.round(preferences.volume * 100)}%
+              <input type="range" min="0" max="1" step=".1" value={preferences.volume} onChange={(e) => update("volume", Number(e.target.value))} />
+            </label>
+            <button className="secondary-button" onClick={() => speak("Hello, I'm Lumi. This is how I sound.", true)}>Preview voice</button>
+          </section>
+          <section className="new-card settings-form">
+            <h2>Display and movement</h2>
+            <label className="choice-row">
+              <span><strong>High contrast</strong><small>Make text and borders stronger.</small></span>
+              <input type="checkbox" checked={preferences.contrast} onChange={(e) => update("contrast", e.target.checked)} />
+            </label>
+            <label>Text size: {["Standard", "Large", "Extra large"][preferences.textSize - 1]}
+              <input type="range" min="1" max="3" value={preferences.textSize} onChange={(e) => update("textSize", Number(e.target.value))} />
+            </label>
+            <label className="choice-row">
+              <span><strong>Reduced motion</strong><small>Remove moving effects.</small></span>
+              <input type="checkbox" checked={preferences.reducedMotion} onChange={(e) => update("reducedMotion", e.target.checked)} />
+            </label>
+          </section>
+        </div>
+      )}
     </div>
   )
 }
+

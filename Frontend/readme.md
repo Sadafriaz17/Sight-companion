@@ -32,10 +32,12 @@ npm install
 
 ## Set the .env file
 
-Copy the example and set the backend address:
+Environment files now live at the project root. Copy the example and set the backend address:
 
 ```bash
+cd ..
 copy .env.example .env
+cd Frontend
 ```
 
 Open `.env` and set:

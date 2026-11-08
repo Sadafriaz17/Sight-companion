@@ -1,11 +1,14 @@
-import { useId, useState, type FormEvent, type ReactNode } from "react"
+import { useId, useState, useEffect, type FormEvent, type ReactNode } from "react"
 import {
   deleteLocalAccount,
   requestPasswordReset,
   setNewPassword,
   submitContactMessage,
+  getProfile,
+  updateProfile,
+  getActivityHistory,
 } from "./api"
-import type { Session } from "./auth.ts"
+import { type Session, updateSession, currentSession } from "./auth.ts"
 
 export type Route =
   | "landing"
@@ -176,7 +179,7 @@ export function LandingPage() {
       <SiteHeader />
       <main>
         <section className="public-hero">
-          <div><span className="hero-kicker"><MiniIcon name="sparkles" size={16} /> Your world, made clearer</span><h1>A friendly voice for what’s around you.</h1><p>Sight Companion describes nearby objects, reads signs, and gives clear spoken warnings—all offline.</p><button className="primary-button" onClick={() => goTo("signup")}>Get started <MiniIcon name="arrow" /></button></div>
+          <div><span className="hero-kicker"><MiniIcon name="sparkles" size={16} /> Your world, made clearer</span><h1>A friendly voice for what's around you.</h1><p>Sight Companion describes nearby objects, reads signs, and gives clear spoken warnings—all offline.</p><button className="primary-button" onClick={() => goTo("signup")}>Get started <MiniIcon name="arrow" /></button></div>
           <div className="public-lumi"><div className="lumi-speech"><strong>Hi, I’m Lumi!</strong><span>Let’s explore together.</span></div><PageLumi /></div>
         </section>
         <section className="public-trust"><span><MiniIcon name="shield" /> 100% offline</span><span><MiniIcon name="lock" /> Private by design</span><span><MiniIcon name="volume" /> Voice-first guidance</span></section>
@@ -242,22 +245,81 @@ export function EmptyState({ title, copy, action, onAction }: { title: string; c
   return <section className="new-empty"><PageLumi mood="listening" /><h2>{title}</h2><p>{copy}</p><button className="primary-button" onClick={onAction}>{action}</button></section>
 }
 
-const initialHistory = [
-  { id: 1, date: "Today", time: "10:42 AM", title: "Morning session", detail: "47 objects · 18 voice guides" },
-  { id: 2, date: "Today", time: "8:15 AM", title: "Kitchen session", detail: "12 objects · 4 voice guides" },
-  { id: 3, date: "Yesterday", time: "4:30 PM", title: "Afternoon session", detail: "31 objects · 9 voice guides" },
-]
-
 export function HistoryPage() {
-  const [items, setItems] = useState(initialHistory)
+  const [items, setItems] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(false)
   const [query, setQuery] = useState("")
-  const [filter, setFilter] = useState("All")
-  const [selected, setSelected] = useState(initialHistory[0])
-  const visible = items.filter((item) => item.title.toLowerCase().includes(query.toLowerCase()) && (filter === "All" || item.date === filter))
-  return <div className="page new-page"><NewTopbar eyebrow="SESSIONS" title="History" copy="Find and review your saved sessions." mood="listening" /><div className="new-search-row"><label><MiniIcon name="search" /><span className="sr-only">Search history</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search sessions" /></label><div>{["All","Today","Yesterday"].map((item) => <button className={filter === item ? "active" : ""} onClick={() => setFilter(item)} key={item}>{item}</button>)}</div></div>{visible.length ? <div className="new-split"><section className="new-card history-new">{["Today","Yesterday"].map((date) => <div key={date}><h2>{date}</h2>{visible.filter((item) => item.date === date).map((item) => <button className={selected?.id === item.id ? "active" : ""} onClick={() => setSelected(item)} key={item.id}><span className="public-icon"><MiniIcon name="clock" /></span><span><strong>{item.title}</strong><small>{item.time} · {item.detail}</small></span></button>)}</div>)}</section>{selected && <section className="new-card history-detail"><p className="eyebrow">SESSION DETAILS</p><h2>{selected.title}</h2><p>{selected.date} at {selected.time}</p><div><strong>Highlights</strong><p>Chair nearby on the left. One sign read aloud. Clear path for most of the session.</p></div><button className="danger-new" onClick={() => { const next = items.filter((item) => item.id !== selected.id); setItems(next); setSelected(next[0]) }}><MiniIcon name="trash" /> Delete session</button></section>}</div> : <EmptyState title="No sessions found" copy="Try another search or start a new live session." action="Open Live view" onAction={() => goTo("live")} />}</div>
-}
+  const [selected, setSelected] = useState<any>(null)
 
-export function NotificationsPage() {
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    getActivityHistory()
+      .then((data) => {
+        if (!cancelled) {
+          setItems(data)
+          setSelected(data[0] || null)
+          setLoading(false)
+        }
+      })
+      .catch(() => { if (!cancelled) { setError(true); setLoading(false) } })
+    return () => { cancelled = true }
+  }, [])
+
+  const visible = items.filter((item: any) => item.title.toLowerCase().includes(query.toLowerCase()))
+  const typeLabel: Record<string, string> = {
+    object: "Object",
+    sign: "Sign",
+    safe: "Safe",
+    session: "Session",
+    settings: "Settings",
+    auth: "Auth",
+  }
+
+  return (
+    <div className="page new-page">
+      <NewTopbar eyebrow="SESSIONS" title="History" copy="Find and review your saved sessions." mood="listening" />
+      <div className="new-search-row">
+        <label><MiniIcon name="search" /><span className="sr-only">Search history</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search sessions" /></label>
+      </div>
+      {loading && <p role="status" style={{ padding: "1rem", opacity: 0.6 }}>Loading activity…</p>}
+      {error && <p role="alert" style={{ padding: "1rem", color: "var(--color-careful, #e07b39)" }}>Could not load activity right now. Please try again later.</p>}
+      {!loading && !error && items.length === 0 && (
+        <EmptyState title="No activity yet" copy="Start a live session to build your history." action="Open Live view" onAction={() => goTo("live")} />
+      )}
+      {!loading && !error && items.length > 0 && (
+        <div className="new-split">
+          <section className="new-card history-new">
+            {visible.map((item: any) => (
+              <button
+                key={item.id}
+                className={selected?.id === item.id ? "active" : ""}
+                onClick={() => setSelected(item)}
+              >
+                <span className="public-icon"><MiniIcon name="clock" /></span>
+                <span>
+                  <strong>{item.title}</strong><br />
+                  <small>{item.created_at || item.time || "Just now"} · {typeLabel[item.type] || item.type}</small>
+                </span>
+              </button>
+            ))}
+          </section>
+          {selected && (
+            <section className="new-card history-detail">
+              <p className="eyebrow">SESSION DETAILS</p>
+              <h2>{selected.title}</h2>
+              <p>{selected.created_at || selected.time || "Just now"}</p>
+              <div><strong>Type:</strong> {typeLabel[selected.type] || selected.type}</div>
+              <div><strong>Meta:</strong> {JSON.stringify(selected.metadata || {})}</div>
+              <button className="danger-new" onClick={() => { const next = items.filter((item: any) => item.id !== selected.id); setItems(next); setSelected(next[0] || null) }}><MiniIcon name="trash" /> Delete session</button>
+            </section>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}export function NotificationsPage() {
   const [items, setItems] = useState([
     ["Nearby object alert", "Chair detected 1.2 metres ahead.", "10 minutes ago"],
     ["Session ready", "Your camera and voice settings are ready.", "Today"],
@@ -268,10 +330,51 @@ export function NotificationsPage() {
 
 export function ProfilePage({ session, onDelete }: { session: Session; onDelete: () => void }) {
   const [saved, setSaved] = useState(false)
-  return <div className="page new-page"><NewTopbar eyebrow="ACCOUNT" title="Your profile" copy="Manage your details on this device." mood="happy" /><section className="new-card profile-new"><div className="profile-photo">{session.name.charAt(0).toUpperCase()}</div><button className="secondary-button">Change photo</button><form onSubmit={(event) => { event.preventDefault(); setSaved(true) }}><label>Name<input defaultValue={session.name} /></label><label>Email<input type="email" defaultValue={session.isGuest ? "" : session.email} /></label><label>New password<input type="password" placeholder="Leave blank to keep your password" /></label>{saved && <p className="new-success" role="status"><MiniIcon name="check" /> Profile saved.</p>}<button className="primary-button">Save profile</button></form><nav className="profile-links" aria-label="More pages"><button onClick={() => goTo("history")}>History</button><button onClick={() => goTo("notifications")}>Notifications</button><button onClick={() => goTo("settings")}>Settings</button><button onClick={() => goTo("about")}>About</button><button onClick={() => goTo("help")}>Help</button></nav><div className="delete-zone"><h2>Delete account</h2><p>This removes the local account from this device.</p><button className="danger-new" onClick={async () => { await deleteLocalAccount(); onDelete() }}><MiniIcon name="trash" /> Delete account</button></div></section></div>
-}
+  const [profile, setProfile] = useState<any>(null)
+  const [loading, setLoading] = useState(true)
+  const [name, setName] = useState(session.name)
+  const [email, setEmail] = useState(session.isGuest ? "" : session.email)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState("")
 
-export function AboutPage() {
+  useEffect(() => {
+    let cancelled = false
+    if (!session.isGuest) {
+      getProfile().then((p) => { if (!cancelled) { setProfile(p); setLoading(false) } }).catch(() => setLoading(false))
+    } else {
+      setLoading(false)
+    }
+    return () => { cancelled = true }
+  }, [session])
+
+  const handleSave = async (event: FormEvent) => {
+    event.preventDefault()
+    setBusy(true)
+    setError("")
+    try {
+      const updates: { full_name?: string; email?: string } = {}
+      if (name && name !== session.name) updates.full_name = name
+      if (email && email !== session.email) updates.email = email
+      if (Object.keys(updates).length) {
+        const updated = await updateProfile(updates)
+        if (updated) {
+          setProfile(updated)
+          const current = currentSession()
+          if (current) {
+            updateSession({ ...current, name: updated.full_name || current.name, email: updated.email || current.email })
+          }
+        }
+      }
+      setSaved(true)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not save profile.")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return <div className="page new-page"><NewTopbar eyebrow="ACCOUNT" title="Your profile" copy="Manage your details on this device." mood="happy" /><section className="new-card profile-new"><div className="profile-photo">{session.name.charAt(0).toUpperCase()}</div><button className="secondary-button">Change photo</button>{error && <p className="new-error" role="alert">{error}</p>}<form onSubmit={handleSave}><label>Name<input value={name} onChange={(e) => setName(e.target.value)} /></label><label>Email<input type="email" value={email} onChange={(e) => setEmail(e.target.value)} /></label><label>New password<input type="password" placeholder="Leave blank to keep your password" /><small>Password changes use the Forgot password flow.</small></label>{saved && <p className="new-success" role="status"><MiniIcon name="check" /> Profile saved.</p>}<button className="primary-button" disabled={busy}>{busy ? "Saving…" : "Save profile"}</button></form><nav className="profile-links" aria-label="More pages"><button onClick={() => goTo("history")}>History</button><button onClick={() => goTo("notifications")}>Notifications</button><button onClick={() => goTo("settings")}>Settings</button><button onClick={() => goTo("about")}>About</button><button onClick={() => goTo("help")}>Help</button></nav><div className="delete-zone"><h2>Delete account</h2><p>This removes the local account from this device.</p><button className="danger-new" onClick={async () => { await deleteLocalAccount(); onDelete() }}><MiniIcon name="trash" /> Delete account</button></div></section></div>
+}export function AboutPage() {
   return <div className="page new-page"><NewTopbar eyebrow="ABOUT" title="A friendly guide, built for privacy" copy="Sight Companion helps visually impaired people understand nearby spaces through clear spoken guidance." mood="proud" /><div className="new-public-grid"><section className="new-card"><span className="public-icon"><MiniIcon name="sparkles" /></span><h2>Our mission</h2><p>Make useful visual information easier to hear, without making the experience feel complicated.</p></section><section className="new-card"><span className="public-icon"><MiniIcon name="shield" /></span><h2>Privacy first</h2><p>Camera processing stays on your device. Images are not uploaded or stored.</p></section><section className="new-card team-wide"><div><p className="eyebrow">THE TEAM</p><h2>Designed with care</h2><p>Our product team works with accessibility specialists and people with lived experience of visual impairment.</p></div><PageLumi mood="listening" /></section></div></div>
 }
 
@@ -294,3 +397,6 @@ export function HelpPage() {
 export function SystemPage({ error = false }: { error?: boolean }) {
   return <main className="system-new"><PageLumi mood={error ? "alert" : "listening"} /><p className="eyebrow">{error ? "SOMETHING WENT WRONG" : "PAGE NOT FOUND"}</p><h1>{error ? "Lumi needs a moment" : "We can’t find that page"}</h1><p>{error ? "Your information is safe. Please try again." : "The link may be old. Let’s take you somewhere useful."}</p><button className="primary-button" onClick={() => goTo(error ? "welcome" : "landing")}>{error ? "Try again" : "Go to home"}</button></main>
 }
+
+
+

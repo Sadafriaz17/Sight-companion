@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react"
+import { getPreferences, updatePreferences, type Preferences as ApiPreferences } from "./api"
+import { currentSession } from "./auth"
 
 export type Preferences = {
   voiceOn: boolean
@@ -21,6 +23,31 @@ export const defaultPreferences: Preferences = {
   reducedMotion: false,
 }
 
+function apiToLocal(api: ApiPreferences): Preferences {
+  return {
+    voiceOn: api.voice_on,
+    contrast: api.contrast,
+    textSize: api.text_size,
+    rate: Number(api.rate),
+    volume: Number(api.volume),
+    voice: api.voice,
+    reducedMotion: api.reduced_motion,
+  }
+}
+
+function localToApi(local: Preferences): Partial<ApiPreferences> {
+  return {
+    voice_on: local.voiceOn,
+    contrast: local.contrast,
+    text_size: local.textSize,
+    rate: local.rate,
+    volume: local.volume,
+    voice: local.voice,
+    reduced_motion: local.reducedMotion,
+    backend_speech: local.voiceOn,
+  }
+}
+
 export function readPreferences(): Preferences {
   try {
     return { ...defaultPreferences, ...JSON.parse(localStorage.getItem(preferenceKey) ?? "{}") }
@@ -36,10 +63,39 @@ export function applyPreferences(value: Preferences) {
 }
 
 export function usePreferences() {
-  const [preferences, setPreferences] = useState(readPreferences)
+  const [preferences, setPreferences] = useState<Preferences>(readPreferences)
+  const [loading, setLoading] = useState(false)
+
+  // Load from Supabase on mount if authenticated
+  useEffect(() => {
+    let mounted = true
+    const session = currentSession()
+    if (session && !session.isGuest) {
+      setLoading(true)
+      getPreferences()
+        .then((apiPrefs) => {
+          if (mounted && apiPrefs) {
+            setPreferences(apiToLocal(apiPrefs))
+          }
+          setLoading(false)
+        })
+        .catch(() => setLoading(false))
+    }
+    return () => { mounted = false }
+  }, [])
+
   useEffect(() => {
     localStorage.setItem(preferenceKey, JSON.stringify(preferences))
     applyPreferences(preferences)
+
+    // Sync to Supabase if authenticated
+    const session = currentSession()
+    if (session && !session.isGuest) {
+      updatePreferences(localToApi(preferences)).catch(() => {
+        // Silently fail - localStorage is the fallback
+      })
+    }
   }, [preferences])
-  return { preferences, setPreferences }
+
+  return { preferences, setPreferences, loading }
 }

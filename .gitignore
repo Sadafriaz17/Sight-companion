@@ -1,4 +1,31 @@
+# ── Root ──────────────────────────────────────────────────────────────────────
 venv/
 __pycache__/
 *.mp4
 Sight_Companion_Analysis.md
+.env
+!.env.example
+
+# ── Backend (merged) ──────────────────────────────────────────────────────────
+*.pyc
+*.log
+
+# ── Frontend (merged) ─────────────────────────────────────────────────────────
+node_modules/
+dist/
+build/
+.cache/
+.vite/
+vite.config.*.timestamp-*
+*.tsbuildinfo
+*-debug.log*
+logs/
+.claude-replay.*
+.tmp-*
+/.figma/design-context/
+Frontend/.figma/design-context/
+**/.figma/design-context/
+/.plugins/
+/opencode-skills/
+Frontend/.plugins/
+Frontend/.opencode-skills/

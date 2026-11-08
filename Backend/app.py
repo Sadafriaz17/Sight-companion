@@ -19,8 +19,8 @@ Start with:
     python Backend/app.py           (from the project root)
 
 Requires:
-    pip install flask flask-cors    (already done via requirements_backend.txt)
-    All AI deps already in Sight-companion-ai/venv/
+    pip install -r requirements.txt    (project root)
+    All AI deps already in Sight-companion-ai/venv/ (optional)
 """
 
 from __future__ import annotations
@@ -29,11 +29,14 @@ import base64
 import io
 import os
 import sys
+import queue
 import threading
 import time
 import logging
 from pathlib import Path
 from typing import Optional
+
+from supabase_client import get_user_from_token, user_client, is_configured as supabase_configured
 
 import cv2  
 import numpy as np
@@ -60,13 +63,26 @@ app = Flask(__name__)
 log = logging.getLogger("sight-companion")
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 
-# Allow Vite dev server and common localhost variants.
-CORS(app, origins=[
+# Allow Vite dev server and common localhost/127.0.0.1 variants.
+# Keep origins explicit (no wildcard) because auth headers/cookies may be used.
+_cors_origins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5174",
     "http://localhost:3000",
     "http://127.0.0.1:3000",
-])
+]
+CORS(
+    app,
+    resources={r"/api/*": {"origins": _cors_origins}},
+    supports_credentials=False,
+    allow_headers=["Content-Type", "Authorization", "Accept", "X-Requested-With"],
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    expose_headers=["Content-Type"],
+    max_age=600,
+    automatic_options=True,
+)
 
 # ---------------------------------------------------------------------------
 # Lazy AI import helpers (so the server starts fast even if models load slowly)
@@ -152,6 +168,13 @@ class _State:
         # Speech
         self.speech_enabled: bool = True
 
+        # Camera frame width (for direction heuristics in /api/detections)
+        self.frame_width: Optional[int] = None
+
+        # Authenticated user for this camera session (for persistence)
+        self.current_user_id: Optional[str] = None
+        self.current_token: Optional[str] = None
+
         # Stop event for camera thread
         self.stop_event: threading.Event = threading.Event()
 
@@ -198,6 +221,58 @@ class _State:
 
 
 _state = _State()
+
+
+# ---------------------------------------------------------------------------
+# Background persistence queue (never blocks the camera thread)
+# ---------------------------------------------------------------------------
+_PERSIST_QUEUE: "queue.Queue" = queue.Queue(maxsize=2000)
+
+
+def _persist_worker():
+    while True:
+        job = _PERSIST_QUEUE.get()
+        if job is None:
+            break
+        try:
+            job()
+        except Exception as exc:
+            log.warning("Persistence job failed: %s", exc)
+        finally:
+            _PERSIST_QUEUE.task_done()
+
+
+threading.Thread(target=_persist_worker, daemon=True, name="persist-worker").start()
+
+
+def _persist_detections(user_id: str, token: str, rows: list):
+    client = user_client(token)
+    if client is None:
+        return
+    payload = [{"user_id": user_id, **r} for r in rows]
+    client.table("detection_events").insert(payload).execute()
+
+
+def _persist_ocr(user_id: str, token: str, rows: list):
+    client = user_client(token)
+    if client is None:
+        return
+    payload = [{"user_id": user_id, **r} for r in rows]
+    client.table("ocr_results").insert(payload).execute()
+
+
+def _persist_activity(user_id: str, token: str, entry: dict):
+    client = user_client(token)
+    if client is None:
+        return
+    client.table("activity_log").insert({"user_id": user_id, **entry}).execute()
+
+
+def _enqueue(job):
+    try:
+        _PERSIST_QUEUE.put_nowait(job)
+    except queue.Full:
+        log.warning("Persistence queue full; dropping job.")
 
 
 # ---------------------------------------------------------------------------
@@ -299,16 +374,25 @@ def _camera_loop():
     _state.ai_error = None
 
     # Open camera
+    configured_source = getattr(_config, "CAMERA_SOURCE", "auto") if _config else "auto"
     try:
-        cam_index, cam_backend = _auto_detect_camera()
+        if configured_source == "auto":
+            cam_index, cam_backend = _auto_detect_camera()
+        elif isinstance(configured_source, str) and configured_source.isdigit():
+            cam_index, cam_backend = int(configured_source), cv2.CAP_DSHOW
+        else:
+            cam_index = configured_source
+            cam_backend = cv2.CAP_DSHOW
     except Exception:
-        cam_index = getattr(_config, "CAMERA_SOURCE", 0) if _config else 0
+        cam_index = 0
         cam_backend = cv2.CAP_DSHOW
 
     if isinstance(cam_index, str):
         cap = cv2.VideoCapture(cam_index)
     else:
         cap = cv2.VideoCapture(cam_index, cam_backend)
+        if not cap.isOpened():
+            cap = cv2.VideoCapture(cam_index, cv2.CAP_MSMF)
         if not cap.isOpened():
             cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
         if not cap.isOpened():
@@ -317,7 +401,7 @@ def _camera_loop():
             cap = cv2.VideoCapture(cam_index)
 
     if not cap.isOpened():
-        _state.camera_error = "Could not open any camera. Check connection and permissions."
+        _state.camera_error = "Could not open a camera. Check connection, permissions, and that no other app is using it."
         _state.camera_running = False
         log.error(_state.camera_error)
         return
@@ -326,6 +410,8 @@ def _camera_loop():
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     log.info("Camera opened: %dx%d @ index %s", width, height, cam_index)
     _state.camera_error = None
+    with _state._lock:
+        _state.frame_width = width
 
     cached_depth = None
     depth_frame_count = 0
@@ -413,6 +499,37 @@ def _camera_loop():
         # --- Store results thread-safely ---
         _state.update_results(jpeg_bytes, detections, ocr_results, instructions)
 
+        # --- Persist meaningful AI events (sampled, non-blocking) ---
+        user_id = _state.current_user_id
+        token = _state.current_token
+        if user_id and token and supabase_configured():
+            # Persist detections every 30 frames (~1-2 seconds at 25 fps)
+            if frame_number % 30 == 0 and detections:
+                rows = []
+                for det in detections[:5]:  # cap per batch
+                    rows.append({
+                        "label": det.get("name", "object"),
+                        "confidence": det.get("confidence", 0.0),
+                        "distance": det.get("distance", "N/A"),
+                        "direction": det.get("direction", "ahead"),
+                        "level": det.get("level", "safe"),
+                        "message": det.get("message", ""),
+                        "box": det.get("box", []),
+                    })
+                if rows:
+                    _enqueue(lambda u=user_id, t=token, r=rows: _persist_detections(u, t, r))
+
+            # Persist OCR results when new text found
+            if ocr_results:
+                rows = []
+                for ocr_item in ocr_results[:3]:
+                    rows.append({
+                        "text": ocr_item.get("text", ""),
+                        "confidence": ocr_item.get("confidence", 0.0),
+                    })
+                if rows:
+                    _enqueue(lambda u=user_id, t=token, r=rows: _persist_ocr(u, t, r))
+
     # Cleanup
     cap.release()
     _state.camera_running = False
@@ -422,7 +539,7 @@ def _camera_loop():
 _camera_thread: Optional[threading.Thread] = None
 
 
-def _start_camera_thread():
+def _start_camera_thread(user_id: Optional[str] = None, token: Optional[str] = None):
     global _camera_thread
     if _camera_thread and _camera_thread.is_alive():
         return  # already running
@@ -430,6 +547,8 @@ def _start_camera_thread():
     _state.stop_event.clear()
     _state.camera_running = True
     _state.camera_error = None
+    _state.current_user_id = user_id
+    _state.current_token = token
     _camera_thread = threading.Thread(target=_camera_loop, daemon=True, name="camera-loop")
     _camera_thread.start()
 
@@ -440,6 +559,8 @@ def _stop_camera_thread():
         _camera_thread.join(timeout=5)
     _state.camera_running = False
     _state.latest_jpeg = None
+    _state.current_user_id = None
+    _state.current_token = None
 
 
 # ---------------------------------------------------------------------------
@@ -471,6 +592,45 @@ def _ok(**kwargs):
 
 def _err(msg: str, code: int = 400):
     return jsonify({"ok": False, "error": msg}), code
+
+
+# ---------------------------------------------------------------------------
+# Auth helpers
+# ---------------------------------------------------------------------------
+
+def _extract_access_token() -> Optional[str]:
+    """Extract Bearer token from Authorization header."""
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        return auth_header[7:]
+    return None
+
+
+def _require_auth() -> tuple[Optional[str], Optional[str]]:
+    """
+    Validate the request's Supabase access token.
+    Returns (user_id, token) on success, or raises a Flask response on failure.
+    """
+    token = _extract_access_token()
+    if not token:
+        return None, None  # caller decides whether auth is required
+
+    if not supabase_configured():
+        return None, None
+
+    user = get_user_from_token(token)
+    if not user:
+        return None, None
+
+    return str(user.id), token
+
+
+def _require_auth_or_401():
+    """Require a valid Supabase token; abort with 401 if missing/invalid."""
+    user_id, token = _require_auth()
+    if not user_id or not token:
+        return _err("Authentication required.", 401)
+    return None  # caller proceeds
 
 
 # ---------- health ----------------------------------------------------------
@@ -520,15 +680,30 @@ def status():
 @app.post("/api/camera/start")
 def camera_start():
     """Start the camera capture + AI inference loop."""
+    user_id, token = _require_auth()
     if _state.camera_running:
         return _ok(message="Camera already running.")
-    _start_camera_thread()
+    _start_camera_thread(user_id=user_id, token=token)
+    # Log camera start as activity
+    if user_id and token and supabase_configured():
+        _enqueue(lambda u=user_id, t=token: _persist_activity(u, t, {
+            "type": "session",
+            "title": "Camera started",
+            "metadata": {"event": "camera_start"},
+        }))
     return _ok(message="Camera starting.")
 
 
 @app.post("/api/camera/stop")
 def camera_stop():
     """Stop camera capture and release resources."""
+    user_id, token = _require_auth()
+    if user_id and token and supabase_configured():
+        _enqueue(lambda u=user_id, t=token: _persist_activity(u, t, {
+            "type": "session",
+            "title": "Camera stopped",
+            "metadata": {"event": "camera_stop"},
+        }))
     _stop_camera_thread()
     return _ok(message="Camera stopped.")
 
@@ -617,10 +792,11 @@ def get_detections():
         # Build a readable direction from bounding box
         if box and len(box) == 4:
             center_x = (box[0] + box[2]) / 2.0
-            # Rough thirds split on assumed 640-wide frame
-            if center_x < 213:
+            width = _state.frame_width or 640
+            third = width / 3.0
+            if center_x < third:
                 direction = "on your left"
-            elif center_x > 427:
+            elif center_x > 2 * third:
                 direction = "on your right"
             else:
                 direction = "ahead"
@@ -792,18 +968,185 @@ def get_activity():
 
 @app.post("/api/contact")
 def post_contact():
-    """Receives a contact message. Logs it; wire up email or DB when ready."""
+    """Receives a contact message. Persists to Supabase contact_messages."""
     data = request.get_json(silent=True) or {}
     name = data.get("name", "").strip()
     email = data.get("email", "").strip()
     message = data.get("message", "").strip()
     if not name or not email or not message:
         return _err("All fields are required.")
+
+    user_id, token = _require_auth()
+    if user_id and token and supabase_configured():
+        client = user_client(token)
+        if client:
+            try:
+                client.table("contact_messages").insert({
+                    "user_id": user_id,
+                    "name": name,
+                    "email": email,
+                    "message": message,
+                }).execute()
+                return _ok(message="Message sent.")
+            except Exception as exc:
+                log.warning("Contact DB insert failed: %s", exc)
+                log.info("[Contact] %s <%s>: %s", name, email, message[:80])
+                return _ok(message="Message received (logged).")
     log.info("[Contact] %s <%s>: %s", name, email, message[:80])
-    return _ok()
+    return _ok(message="Message received (logged).")
 
 
-# ---------- health root -----------------------------------------------------
+# ---------- profile --------------------------------------------------------
+
+@app.get("/api/profile")
+def get_profile():
+    """Return the authenticated user's profile."""
+    user_id, token = _require_auth()
+    if not user_id or not token:
+        return _err("Authentication required.", 401)
+    client = user_client(token)
+    if not client:
+        return _err("Supabase not configured.", 503)
+    try:
+        resp = client.table("profiles").select("*").eq("id", user_id).single().execute()
+        return _ok(profile=resp.data)
+    except Exception as exc:
+        log.warning("Profile fetch failed: %s", exc)
+        return _err("Could not load profile.", 500)
+
+
+@app.put("/api/profile")
+def update_profile():
+    """Update the authenticated user's profile (name, email)."""
+    user_id, token = _require_auth()
+    if not user_id or not token:
+        return _err("Authentication required.", 401)
+    client = user_client(token)
+    if not client:
+        return _err("Supabase not configured.", 503)
+
+    data = request.get_json(silent=True) or {}
+    allowed = {"email", "full_name"}
+    updates = {k: v for k, v in data.items() if k in allowed}
+    if not updates:
+        return _err("No valid profile fields provided.", 400)
+
+    try:
+        resp = client.table("profiles").update(updates).eq("id", user_id).execute()
+        return _ok(profile=resp.data[0] if resp.data else None)
+    except Exception as exc:
+        log.warning("Profile update failed: %s", exc)
+        return _err("Could not save profile.", 500)
+
+
+# ---------- user preferences ----------------------------------------------
+
+@app.get("/api/preferences")
+def get_preferences():
+    """Return the authenticated user's accessibility preferences."""
+    user_id, token = _require_auth()
+    if not user_id or not token:
+        return _err("Authentication required.", 401)
+    client = user_client(token)
+    if not client:
+        return _err("Supabase not configured.", 503)
+    try:
+        resp = client.table("user_preferences").select("*").eq("user_id", user_id).execute()
+        if not resp.data:
+            return _ok(preferences=None)
+        return _ok(preferences=resp.data[0])
+    except Exception as exc:
+        log.warning("Preferences fetch failed: %s", exc)
+        return _err("Could not load preferences.", 500)
+
+
+@app.put("/api/preferences")
+def update_preferences():
+    """Update (or create) the authenticated user's accessibility preferences."""
+    user_id, token = _require_auth()
+    if not user_id or not token:
+        return _err("Authentication required.", 401)
+    client = user_client(token)
+    if not client:
+        return _err("Supabase not configured.", 503)
+
+    data = request.get_json(silent=True) or {}
+    allowed = {
+        "voice_on", "contrast", "text_size", "rate", "volume",
+        "voice", "reduced_motion", "backend_speech",
+    }
+    updates = {k: v for k, v in data.items() if k in allowed}
+    if not updates:
+        return _err("No valid preference fields provided.", 400)
+
+    updates["user_id"] = user_id
+    try:
+        # Upsert: create row when none exists, otherwise update.
+        resp = client.table("user_preferences").upsert(updates).execute()
+        return _ok(preferences=resp.data)
+    except Exception as exc:
+        log.warning("Preferences update failed: %s", exc)
+        return _err("Could not save preferences.", 500)
+
+
+# ---------- detection history ---------------------------------------------
+
+@app.get("/api/detection-history")
+def get_detection_history():
+    """Return the authenticated user's detection event history."""
+    user_id, token = _require_auth()
+    if not user_id or not token:
+        return _err("Authentication required.", 401)
+    client = user_client(token)
+    if not client:
+        return _err("Supabase not configured.", 503)
+    try:
+        limit = int(request.args.get("limit", 50))
+        resp = client.table("detection_events").select("*").eq("user_id", user_id).order("created_at", desc=True).limit(limit).execute()
+        return _ok(detection_events=resp.data)
+    except Exception as exc:
+        log.warning("Detection history fetch failed: %s", exc)
+        return _err("Could not load detection history.", 500)
+
+
+# ---------- OCR history ---------------------------------------------------
+
+@app.get("/api/ocr-history")
+def get_ocr_history():
+    """Return the authenticated user's OCR result history."""
+    user_id, token = _require_auth()
+    if not user_id or not token:
+        return _err("Authentication required.", 401)
+    client = user_client(token)
+    if not client:
+        return _err("Supabase not configured.", 503)
+    try:
+        limit = int(request.args.get("limit", 50))
+        resp = client.table("ocr_results").select("*").eq("user_id", user_id).order("created_at", desc=True).limit(limit).execute()
+        return _ok(ocr_results=resp.data)
+    except Exception as exc:
+        log.warning("OCR history fetch failed: %s", exc)
+        return _err("Could not load OCR history.", 500)
+
+
+# ---------- activity history ----------------------------------------------
+
+@app.get("/api/activity-history")
+def get_activity_history():
+    """Return the authenticated user's activity log history."""
+    user_id, token = _require_auth()
+    if not user_id or not token:
+        return _err("Authentication required.", 401)
+    client = user_client(token)
+    if not client:
+        return _err("Supabase not configured.", 503)
+    try:
+        limit = int(request.args.get("limit", 50))
+        resp = client.table("activity_log").select("*").eq("user_id", user_id).order("created_at", desc=True).limit(limit).execute()
+        return _ok(activity_log=resp.data)
+    except Exception as exc:
+        log.warning("Activity history fetch failed: %s", exc)
+        return _err("Could not load activity history.", 500)
 
 @app.get("/")
 def root():

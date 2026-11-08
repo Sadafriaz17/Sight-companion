@@ -1,14 +1,14 @@
 import { useEffect, useState, type ReactNode } from "react"
 import Auth from "./Auth.tsx"
-import { currentSession, signOut, type Session } from "./auth.ts"
+import { currentSession, signOut, type Session, onAuthChange } from "./auth.ts"
 import { usePreferences } from "./accessibility"
 import { speak } from "./voice"
 import { ActivityPage, AskLumiPage, LivePage, SafetyPage, SettingsPage, SignsPage } from "./AppPages"
-import { AboutPage, FirstWelcomePage, HelpPage, LandingPage, LumiMark, NotificationsPage, PageLumi, PasswordPage, ProfilePage, SetupPage, SystemPage, goTo, type Route } from "./Pages"
+import { AboutPage, FirstWelcomePage, HelpPage, LandingPage, LumiMark, NotificationsPage, PageLumi, PasswordPage, ProfilePage, SetupPage, SystemPage, HistoryPage, goTo, type Route } from "./Pages"
 import { PrivacyPage, TermsPage } from "./LegalPages"
 
-type Page = "welcome" | "live" | "ask" | "signs" | "safety" | "activity" | "settings" | "notifications" | "profile" | "about" | "help" | "privacy" | "terms"
-const protectedPages: Page[] = ["welcome","live","ask","signs","safety","activity","settings","notifications","profile","about","help","privacy","terms"]
+type Page = "welcome" | "live" | "ask" | "signs" | "safety" | "activity" | "settings" | "notifications" | "profile" | "about" | "help" | "privacy" | "terms" | "history"
+const protectedPages: Page[] = ["welcome","live","ask","signs","safety","activity","settings","notifications","profile","about","help","privacy","terms","history"]
 const routes: Route[] = ["landing","login","signup","forgot","check-email","new-password","verified","first-welcome","setup",...protectedPages,"not-found","error"]
 
 function readRoute(hasSession: boolean): Route {
@@ -46,19 +46,101 @@ function Home({ name }: { name: string }) {
 
 function Shell({ page, session, onSignOut, children }: { page: Page; session: Session; onSignOut: () => void; children: ReactNode }) {
   const [profileOpen, setProfileOpen] = useState(false), [moreOpen, setMoreOpen] = useState(false)
-  return <div className="app-shell"><aside className="sidebar"><button className="brand" onClick={() => goTo("landing")} aria-label="Sight Companion landing page"><LumiMark /><span><strong>Sight</strong><small>Companion</small></span></button><nav aria-label="Main navigation">{nav.map((item) => <button className={`nav-item ${page === item.id ? "active" : ""}`} key={item.id} onClick={() => goTo(item.id)}><Icon name={item.icon} /><span>{item.label}</span></button>)}</nav><div className="sidebar-help"><PageLumi mood="happy" /><strong>Need a hand?</strong><p>Lumi is always here to guide you.</p><button onClick={() => goTo("help")}>Get support</button></div></aside><main className="app-main"><header className="account-bar"><span>All camera work stays on this device</span><button onClick={() => setProfileOpen(!profileOpen)} aria-expanded={profileOpen}><span className="avatar">{session.name[0].toUpperCase()}</span>{session.name}<Icon name="more" /></button>{profileOpen && <div className="profile-menu">{[["notifications","Notifications"],["profile","Profile"],["help","Help"],["about","About"]].map(([id,label]) => <button key={id} onClick={() => goTo(id as Page)}>{label}</button>)}<button onClick={onSignOut}>Log out</button></div>}</header>{children}</main><nav className="mobile-navigation" aria-label="Mobile navigation">{nav.filter((item) => ["welcome","live","ask","activity"].includes(item.id)).map((item) => <button className={page === item.id ? "active" : ""} key={item.id} onClick={() => goTo(item.id)}><Icon name={item.icon} /><span>{item.label}</span></button>)}<button onClick={() => setMoreOpen(!moreOpen)}><Icon name="more" /><span>More</span></button></nav>{moreOpen && <div className="more-sheet" role="dialog" aria-label="More pages"><h2>More</h2>{nav.filter((item) => !["welcome","live","ask","activity"].includes(item.id)).map((item) => <button key={item.id} onClick={() => { setMoreOpen(false); goTo(item.id) }}><Icon name={item.icon} />{item.label}</button>)}<button onClick={() => goTo("profile")}>Profile</button><button onClick={() => setMoreOpen(false)}>Close</button></div>}</div>
+  return (
+    <div className="app-shell">
+      <aside className="sidebar">
+        <button className="brand" onClick={() => goTo("landing")} aria-label="Sight Companion landing page">
+          <LumiMark /><span><strong>Sight</strong><small>Companion</small></span>
+        </button>
+        <nav aria-label="Main navigation">
+          {nav.map((item) => (
+            <button className={`nav-item ${page === item.id ? "active" : ""}`} key={item.id} onClick={() => goTo(item.id)}>
+              <Icon name={item.icon} /><span>{item.label}</span>
+            </button>
+          ))}
+        </nav>
+        <div className="sidebar-help">
+          <PageLumi mood="happy" /><strong>Need a hand?</strong><p>Lumi is always here to guide you.</p>
+          <button onClick={() => goTo("help")}>Get support</button>
+        </div>
+      </aside>
+      <main className="app-main">
+        <header className="account-bar">
+          <span>All camera work stays on this device</span>
+          <button onClick={() => setProfileOpen(!profileOpen)} aria-expanded={profileOpen} aria-haspopup="menu">
+            <span className="avatar">{session.name[0].toUpperCase()}</span>{session.name}<Icon name="more" />
+          </button>
+          {profileOpen && (
+            <div className="profile-menu" role="menu">
+              {[["notifications","Notifications"],["profile","Profile"],["help","Help"],["about","About"]].map(([id,label]) => (
+                <button key={id} role="menuitem" onClick={() => { setProfileOpen(false); goTo(id as Page) }}>{label}</button>
+              ))}
+              <button role="menuitem" onClick={onSignOut}>Log out</button>
+            </div>
+          )}
+        </header>
+        {children}
+      </main>
+      <nav className="mobile-navigation" aria-label="Mobile navigation">
+        {nav.filter((item) => ["welcome","live","ask","activity"].includes(item.id)).map((item) => (
+          <button className={page === item.id ? "active" : ""} key={item.id} onClick={() => goTo(item.id)}>
+            <Icon name={item.icon} /><span>{item.label}</span>
+          </button>
+        ))}
+        <button onClick={() => setMoreOpen(!moreOpen)} aria-expanded={moreOpen}><Icon name="more" /><span>More</span></button>
+      </nav>
+      {moreOpen && (
+        <div className="more-sheet" role="dialog" aria-label="More pages">
+          <h2>More</h2>
+          {nav.filter((item) => !["welcome","live","ask","activity"].includes(item.id)).map((item) => (
+            <button key={item.id} onClick={() => { setMoreOpen(false); goTo(item.id) }}>
+              <Icon name={item.icon} />{item.label}
+            </button>
+          ))}
+          <button onClick={() => { setMoreOpen(false); goTo("profile") }}>Profile</button>
+          <button onClick={() => { setMoreOpen(false); goTo("notifications") }}>Notifications</button>
+          <button onClick={() => setMoreOpen(false)}>Close</button>
+        </div>
+      )}
+    </div>
+  )
 }
 
 export default function App() {
-  const [session, setSession] = useState<Session | null>(currentSession)
-  const [route, setRoute] = useState<Route>(() => readRoute(Boolean(currentSession())))
-  const { preferences, setPreferences } = usePreferences()
-  useEffect(() => { const update = () => setRoute(readRoute(Boolean(currentSession()))); window.addEventListener("hashchange", update); return () => window.removeEventListener("hashchange", update) }, [])
+  const [session, setSession] = useState<Session | null>(null)
+  const [authReady, setAuthReady] = useState(false)
+  const [route, setRoute] = useState<Route>("landing")
+  const { preferences, setPreferences, loading } = usePreferences()
+  useEffect(() => {
+    const update = () => setRoute(readRoute(Boolean(currentSession())))
+    window.addEventListener("hashchange", update)
+    return () => window.removeEventListener("hashchange", update)
+  }, [])
+  useEffect(() => {
+    let mounted = true
+    import("./auth").then(({ currentSession }) => {
+      if (mounted) {
+        setSession(currentSession())
+        setRoute(readRoute(Boolean(currentSession())))
+        setAuthReady(true)
+      }
+    })
+    const unsub = onAuthChange((s) => {
+      if (mounted) {
+        setSession(s)
+        setRoute(readRoute(Boolean(s)))
+      }
+    })
+    return () => { mounted = false; unsub() }
+  }, [])
   useEffect(() => {
     const titles: Partial<Record<Route, string>> = { landing: "Sight Companion", login: "Log in", signup: "Sign up", welcome: "Home", live: "Live view", ask: "Ask Lumi", signs: "Signs", safety: "Safety", activity: "Activity", settings: "Settings", profile: "Profile", help: "Help", about: "About", privacy: "Privacy", terms: "Terms" }
     const title = titles[route]
     if (title) speak(title)
   }, [route])
+  if (!authReady) {
+    return <div className="page" role="status" style={{ padding: "2rem" }}>Loading…</div>
+  }
   if (route === "not-found") return <SystemPage />
   if (route === "error") return <SystemPage error />
   if (!session) {
@@ -78,7 +160,8 @@ export default function App() {
   else if (page === "signs") content = <SignsPage />
   else if (page === "safety") content = <SafetyPage />
   else if (page === "activity") content = <ActivityPage />
-  else if (page === "settings") content = <SettingsPage preferences={preferences} setPreferences={setPreferences} />
+  else if (page === "history") content = <HistoryPage />
+  else if (page === "settings") content = <SettingsPage preferences={preferences} setPreferences={setPreferences} loading={loading} />
   else if (page === "profile") content = <ProfilePage session={session} onDelete={logout} />
   else if (page === "notifications") content = <NotificationsPage />
   else if (page === "help") content = <HelpPage />

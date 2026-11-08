@@ -12,6 +12,7 @@ export default defineConfig(({ mode }) => {
   const emitSourcemaps = mode === 'development'
 
   return {
+    envDir: path.resolve(__dirname, '..'),
     base: '/',
     build: {
       sourcemap: emitSourcemaps ? 'inline' : false,

@@ -4,8 +4,7 @@ import {
   type FormEvent,
   type ReactNode,
 } from "react"
-import { signIn, signUp, type Session } from "./auth.ts"
-import { continueWithGoogle } from "./api"
+import { signIn, signUp, guestSession, type Session } from "./auth.ts"
 import { LumiMark, PageLumi, goTo } from "./Pages"
 
 type Mode = "signin" | "signup"
@@ -122,7 +121,7 @@ export default function Auth({
     else if (enteredPassword.length < 8)
       nextErrors.password = "Use at least 8 characters."
     if (mode === "signup" && enteredPassword !== confirmPassword)
-      nextErrors.confirmPassword = "Those passwords don’t match yet."
+      nextErrors.confirmPassword = "Those passwords don't match yet."
     if (mode === "signup" && !terms)
       nextErrors.terms = "Please agree to the terms to continue."
 
@@ -164,10 +163,13 @@ export default function Auth({
       onAuthenticated(session, mode === "signup")
     } catch (error) {
       const message =
-        error instanceof Error && error.message === "DUPLICATE_EMAIL"
-          ? "An account with this email already exists."
-          : "That email and password don’t match."
-      const next = mode === "signup" ? { email: message } : { form: message }
+        error instanceof Error
+          ? error.message
+          : "Authentication failed. Please try again."
+      const next =
+        mode === "signup"
+          ? { email: message }
+          : { form: message }
       setErrors(next)
       requestAnimationFrame(() => emailRef.current?.focus())
     } finally {
@@ -392,9 +394,10 @@ export default function Auth({
           <button
             type="button"
             className="auth-guest"
-            onClick={async () =>
-              onAuthenticated(await continueWithGoogle(), mode === "signup")
-            }
+            onClick={() => {
+              const session = guestSession()
+              onAuthenticated(session, false)
+            }}
           >
             Continue as guest
           </button>
