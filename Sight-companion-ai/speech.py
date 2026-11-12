@@ -6,13 +6,12 @@ import sys
 
 class SpeechEngine:
     """
-    Reliable Windows TTS engine.
+    Cross-platform TTS engine for Sight Companion backend.
 
-    Strategy:
-      1. Primary  — PowerShell System.Speech (always works on Windows,
-                    no COM threading issues, no re-init problems).
-      2. Fallback — pyttsx3 re-initialised fresh for every call
-                    (covers non-Windows / edge cases).
+    Platform strategy:
+      Windows — PowerShell System.Speech (primary) → pyttsx3 (fallback)
+      Linux   — espeak-ng (if installed) → silent no-op (cloud servers have
+                no audio output; the frontend handles TTS via Web Speech API)
 
     A single daemon worker thread owns all speech so the video loop
     is never blocked. Queue size = 1 so stale alerts are dropped
@@ -20,7 +19,7 @@ class SpeechEngine:
     """
 
     def __init__(self):
-        self._q = queue.Queue(maxsize=1)
+        self._q: queue.Queue = queue.Queue(maxsize=1)
         self._thread = threading.Thread(target=self._worker, daemon=True)
         self._thread.start()
 
@@ -29,7 +28,10 @@ class SpeechEngine:
     # ------------------------------------------------------------------
 
     def _speak_powershell(self, text: str) -> bool:
-        """Speak via PowerShell System.Speech. Returns True on success."""
+        """Speak via PowerShell System.Speech (Windows only). Returns True on success."""
+        # subprocess.CREATE_NO_WINDOW is Windows-only — guard before use
+        if sys.platform != "win32":
+            return False
         safe = text.replace("'", "").replace('"', "").replace("`", "")
         ps_cmd = (
             "Add-Type -AssemblyName System.Speech; "
@@ -39,10 +41,11 @@ class SpeechEngine:
             f"$synth.Speak('{safe}')"
         )
         try:
+            CREATE_NO_WINDOW = 0x08000000  # Windows-only flag, accessed by value
             result = subprocess.run(
                 ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_cmd],
                 timeout=20,
-                creationflags=subprocess.CREATE_NO_WINDOW,
+                creationflags=CREATE_NO_WINDOW,
                 capture_output=True,
             )
             if result.returncode == 0:
@@ -55,7 +58,7 @@ class SpeechEngine:
     def _speak_pyttsx3(self, text: str) -> bool:
         """Re-initialize pyttsx3 fresh for every call (avoids COM state issues)."""
         try:
-            import pyttsx3
+            import pyttsx3  # noqa: PLC0415 — optional dep, not available on Linux
             engine = pyttsx3.init()
             engine.setProperty("rate", 155)
             engine.setProperty("volume", 1.0)
@@ -67,6 +70,24 @@ class SpeechEngine:
             print(f"[TTS-py3] exception: {e}")
         return False
 
+    def _speak_espeak(self, text: str) -> bool:
+        """Use espeak-ng on Linux if available. Returns True on success."""
+        if sys.platform == "win32":
+            return False
+        try:
+            result = subprocess.run(
+                ["espeak-ng", "-s", "160", text],
+                timeout=15,
+                capture_output=True,
+            )
+            return result.returncode == 0
+        except FileNotFoundError:
+            # espeak-ng not installed — silent no-op on cloud servers
+            return False
+        except Exception as e:
+            print(f"[TTS-espeak] exception: {e}")
+            return False
+
     def _worker(self):
         """Dedicated thread — processes speech requests one at a time."""
         while True:
@@ -74,12 +95,14 @@ class SpeechEngine:
             if text is None:
                 break  # shutdown signal
 
-            # Try PowerShell first (most reliable on Windows)
             if sys.platform == "win32":
+                # Windows: PowerShell primary, pyttsx3 fallback
                 if self._speak_powershell(text):
                     continue
-            # Fallback
-            self._speak_pyttsx3(text)
+                self._speak_pyttsx3(text)
+            else:
+                # Linux/Mac: try espeak-ng, otherwise silent (cloud has no audio)
+                self._speak_espeak(text)
 
     # ------------------------------------------------------------------
     # Public API

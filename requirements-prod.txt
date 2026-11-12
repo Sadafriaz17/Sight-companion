@@ -1,0 +1,27 @@
+# ── Sight Companion — Production Requirements (Linux / Render) ───────────────
+# Used by the Docker build for Render.com deployment.
+#
+# EXCLUDED intentionally:
+#   torch, torchvision — installed separately in Dockerfile with the CPU-only
+#                        wheel index to avoid pulling the 2 GB CUDA build.
+#   pyttsx3, pywin32   — Windows-only; crash on Linux. Backend TTS is a no-op
+#                        on cloud servers; the browser handles TTS via voice.ts.
+
+# ── Web server ────────────────────────────────────────────────────────────────
+flask>=3.1.0
+flask-cors>=6.0.0
+python-dotenv>=1.0.0
+gunicorn>=21.2.0
+
+# ── Database / Auth ───────────────────────────────────────────────────────────
+supabase>=2.4.0
+
+# ── AI pipeline (torch/torchvision installed separately — see Dockerfile) ─────
+ultralytics>=8.0.0
+transformers>=4.36.0
+easyocr>=1.7.0
+
+# ── Computer vision ───────────────────────────────────────────────────────────
+opencv-python-headless>=4.8.0
+pillow>=10.0.0
+numpy>=1.24.0

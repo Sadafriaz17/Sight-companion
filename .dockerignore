@@ -1,0 +1,41 @@
+# ── Version control ───────────────────────────────────────────────────────────
+.git/
+.gitignore
+
+# ── Python ────────────────────────────────────────────────────────────────────
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# ── Frontend (not needed in backend image) ────────────────────────────────────
+Frontend/
+node_modules/
+
+# ── Secrets ───────────────────────────────────────────────────────────────────
+.env
+*.env.local
+
+# ── Build artifacts ───────────────────────────────────────────────────────────
+dist/
+build/
+.cache/
+.vite/
+*.tsbuildinfo
+
+# ── Evaluation / research ─────────────────────────────────────────────────────
+Sight-companion-ai/evaluation/
+Sight-companion-ai/output.mp4
+Sight-companion-ai/find_camera.py
+Sight-companion-ai/test_tts.py
+
+# ── Misc ──────────────────────────────────────────────────────────────────────
+*.mp4
+*.log
+*.md
+README.md
+check_imports.py
+database/
+

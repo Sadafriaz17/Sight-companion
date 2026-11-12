@@ -73,6 +73,10 @@ _cors_origins = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
 ]
+# Production: add deployed frontend URL from environment variable
+_frontend_url = os.environ.get("FRONTEND_URL", "").rstrip("/")
+if _frontend_url and _frontend_url not in _cors_origins:
+    _cors_origins.append(_frontend_url)
 CORS(
     app,
     resources={r"/api/*": {"origins": _cors_origins}},

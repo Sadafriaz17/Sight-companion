@@ -29,3 +29,7 @@ Frontend/.figma/design-context/
 /opencode-skills/
 Frontend/.plugins/
 Frontend/.opencode-skills/
+# AI model weights — downloaded during Docker build
+*.pt
+*.pth
+*.onnx
