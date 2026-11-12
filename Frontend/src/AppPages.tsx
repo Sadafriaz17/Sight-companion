@@ -58,6 +58,178 @@ function PageHead({ title, copy, mood = "happy" }: { title: string; copy: string
   return <header className="tool-head"><div><p className="eyebrow">SIGHT COMPANION</p><h1>{title}</h1><p>{copy}</p></div><PageLumi mood={mood} /></header>
 }
 // â”€â”€â”€ LivePage â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+// --- LumiChatPanel -----------------------------------------------------------
+// Shared Lumi chat/voice panel reused in LivePage's right panel.
+type Chat = { from: "you" | "lumi"; text: string }
+const liveChatKey = "sight-companion:live-chats"
+
+function LumiChatPanel({ camReady, compact }: { camReady: boolean; compact?: boolean }) {
+  const [messages, setMessages] = useState<Chat[]>(() => {
+    try { return JSON.parse(localStorage.getItem(liveChatKey) || "[]") } catch { return [] }
+  })
+  const [text, setText] = useState("")
+  const [status, setStatus] = useState<"ready" | "listening" | "thinking" | "speaking">("ready")
+  const chatEndRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }) }, [messages, status])
+
+  const add = (msg: Chat) => setMessages((prev) => {
+    const next = [...prev, msg]
+    localStorage.setItem(liveChatKey, JSON.stringify(next.slice(-40)))
+    return next
+  })
+
+  const ask = async (q = text.trim()) => {
+    if (!q) return
+    add({ from: "you", text: q })
+    setText("")
+    setStatus("thinking")
+    const dets = await getDetectionResults()
+    const ql = q.toLowerCase()
+    let reply = "I am not sure. Try pointing the camera at the area and ask again."
+    if (ql.includes("front") || ql.includes("ahead") || ql.includes("see") || ql.includes("surround") || ql.includes("descri")) {
+      if (dets.length === 0) reply = camReady ? "I can't detect anything right now. Move the camera slowly." : "Start the camera first so I can see your surroundings."
+      else reply = "I can see: " + dets.map((d) => d.label + " " + d.direction + (d.distance !== "N/A" ? " (" + d.distance + ")" : "")).join(", ") + "."
+    } else if (ql.includes("sign") || ql.includes("read") || ql.includes("text")) {
+      const ocr = await triggerOcrRead()
+      if (ocr.results.length > 0) reply = "I can read: " + ocr.results.map((r) => r.text).join("; ") + "."
+      else reply = "I don't see any clear text right now."
+    } else if (ql.includes("safe") || ql.includes("walk") || ql.includes("obstacle") || ql.includes("path")) {
+      const dangerous = dets.filter((d) => d.level === "danger" || d.level === "careful")
+      if (dangerous.length === 0) reply = dets.length === 0 ? (camReady ? "I don't see any objects. Keep moving carefully." : "Start the camera so I can check your path.") : "The path looks clear. Walk with care."
+      else reply = "Careful - I can see " + dangerous.map((d) => d.label + " " + d.direction).join(", ") + "."
+    } else if (ql.includes("repeat") || ql.includes("say again")) {
+      const lastLumi = [...messages].reverse().find((m) => m.from === "lumi")
+      reply = lastLumi ? lastLumi.text : "Nothing to repeat yet."
+    } else if (ql.includes("danger") || ql.includes("warning") || ql.includes("close") || ql.includes("near")) {
+      const danger = dets.filter((d) => d.level === "danger")
+      if (danger.length === 0) reply = "No dangerous objects detected right now."
+      else reply = "Warning: " + danger.map((d) => d.label + " is " + d.direction + (d.distance !== "N/A" ? " at " + d.distance : "")).join("; ") + "."
+    } else if (dets.length > 0) {
+      reply = "Based on what I can see - " + dets.map((d) => d.label + " " + d.direction).join(", ") + " - I am not sure how to answer that. Try asking what is in front of me or is it safe to walk."
+    }
+    setStatus("speaking")
+    add({ from: "lumi", text: reply })
+    speak(reply)
+    await new Promise<void>((r) => setTimeout(r, 1200))
+    setStatus("ready")
+  }
+
+  const listen = () => {
+    type SRCtor = new () => { lang: string; onstart: (() => void) | null; onresult: ((e: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null; onerror: (() => void) | null; onend: (() => void) | null; start: () => void }
+    const w = window as unknown as { SpeechRecognition?: SRCtor; webkitSpeechRecognition?: SRCtor }
+    const SR = w.SpeechRecognition || w.webkitSpeechRecognition
+    if (!SR) { alert("Speech recognition is not supported in this browser. Please type your question."); return }
+    const rec = new SR()
+    rec.lang = "en-US"
+    rec.onstart = () => setStatus("listening")
+    rec.onresult = (e) => { const t = e.results[0][0].transcript; setText(t); void ask(t) }
+    rec.onerror = () => setStatus("ready")
+    rec.onend = () => { if (status === "listening") setStatus("ready") }
+    rec.start()
+  }
+
+  const quickAsks = ["What is in front of me?", "Read this sign", "Is it safe to walk?", "Describe my surroundings"]
+
+  return (
+    <div className={compact ? "lcp lcp-compact" : "lcp"}>
+
+      {/* Quick suggestion chips */}
+      <div className="lcp-chips">
+        {["What's in front of me?", "Read this sign", "Safe to walk?", "Describe surroundings"].map((item) => (
+          <button key={item} className="lcp-chip" onClick={() => void ask(item)} disabled={status === "thinking"}>
+            {item}
+          </button>
+        ))}
+      </div>
+
+      {/* Scrollable chat area */}
+      <div className="lcp-messages" aria-live="polite" role="log">
+        {messages.length === 0 && status !== "thinking" && (
+          <div className="lcp-empty">
+            <div className="lcp-empty-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+                <path d="M12 22C6.477 22 2 17.523 2 12S6.477 2 12 2s10 4.477 10 10-4.477 10-10 10z"/>
+                <path d="M8 12s1.5 2 4 2 4-2 4-2M9 9h.01M15 9h.01"/>
+              </svg>
+            </div>
+            <p className="lcp-empty-title">Hi, I'm Lumi</p>
+            <p className="lcp-empty-hint">{camReady ? "Camera is live. Ask me anything about what I see." : "Start the camera, then ask me anything."}</p>
+          </div>
+        )}
+        {messages.map((message, index) => (
+          <div className={`lcp-bubble lcp-bubble-${message.from}`} key={`${message.text}-${index}`}>
+            <div className="lcp-bubble-label">{message.from === "you" ? "You" : "Lumi"}</div>
+            <div className="lcp-bubble-text">{message.text}</div>
+          </div>
+        ))}
+        {status === "thinking" && (
+          <div className="lcp-bubble lcp-bubble-lumi">
+            <div className="lcp-bubble-label">Lumi</div>
+            <div className="lcp-bubble-text">
+              <span className="lcp-dots" aria-label="Lumi is thinking">
+                <span /><span /><span />
+              </span>
+            </div>
+          </div>
+        )}
+        <div ref={chatEndRef} />
+      </div>
+
+      {/* Status bar */}
+      <div className="lcp-statusbar" role="status" aria-live="polite">
+        <span className={`lcp-status-dot lcp-status-${status}`} />
+        <span>{status === "ready" ? "Ready" : status === "listening" ? "Listening..." : status === "thinking" ? "Thinking..." : "Speaking..."}</span>
+      </div>
+
+      {/* Input row */}
+      <div className="lcp-input-row">
+        <button
+          className={`lcp-mic${status === "listening" ? " lcp-mic-active" : ""}`}
+          onClick={listen}
+          aria-label={status === "listening" ? "Listening..." : "Speak to Lumi"}
+          title={status === "listening" ? "Listening..." : "Tap to speak"}
+          disabled={status === "thinking"}
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+            <rect x="9" y="3" width="6" height="12" rx="3" />
+            <path d="M5 11a7 7 0 0 0 14 0M12 18v3" />
+          </svg>
+        </button>
+        <input
+          className="lcp-input"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") void ask() }}
+          placeholder="Ask Lumi..."
+          aria-label="Type your question"
+          disabled={status === "thinking"}
+        />
+        <button
+          className="lcp-send"
+          onClick={() => void ask()}
+          disabled={status === "thinking" || !text.trim()}
+          aria-label="Send message"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+            <path d="M22 2 11 13M22 2 15 22l-4-9-9-4 20-7z"/>
+          </svg>
+        </button>
+        <button
+          className="lcp-stop"
+          onClick={stopSpeaking}
+          aria-label="Stop speaking"
+          title="Stop Lumi speaking"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+            <rect x="6" y="6" width="12" height="12" rx="2" />
+          </svg>
+        </button>
+      </div>
+    </div>
+  )
+}
 type CamState = "checking" | "backend-down" | "off" | "starting" | "ready" | "error"
 
 export function LivePage() {
@@ -326,45 +498,80 @@ export function LivePage() {
           </div>
         </section>
 
-        <aside className="new-card detection-panel">
-          <p className="eyebrow">WHAT LUMI SEES</p>
-          <div className="danger-banner">
-            <AppIcon name="alert" />
-            <div><strong>Guidance</strong><p>{last}</p></div>
+        <aside className="lumi-panel">
+
+          {/* Lumi panel header */}
+          <div className="lumi-panel-header">
+            <div className="lumi-panel-title">
+              <div className="lumi-avatar">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+                  <path d="M12 22C6.477 22 2 17.523 2 12S6.477 2 12 2s10 4.477 10 10-4.477 10-10 10z"/>
+                  <path d="M8 12s1.5 2 4 2 4-2 4-2M9 9h.01M15 9h.01"/>
+                </svg>
+              </div>
+              <div>
+                <p className="lumi-panel-name">Lumi</p>
+                <p className="lumi-panel-sub">AI Vision Assistant</p>
+              </div>
+            </div>
           </div>
-          {detections.length > 0 ? (
-            detections.map((item) => (
-              <article className={`result-row ${item.level}`} key={item.label + item.direction}>
-                <span>{item.level === "safe" ? "Safe" : item.level === "danger" ? "Danger" : "Careful"}</span>
-                <div><strong>{item.label}</strong><p>{item.direction}</p></div>
-                <b>{item.distance !== "N/A" ? item.distance : ""}</b>
-              </article>
-            ))
-          ) : (
-            <div className="empty-inline">{camState === "ready" ? "No objects detected. Move camera slowly." : "Start the camera to see detections."}</div>
-          )}
-          <div style={{ marginTop: "1rem", borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: "1rem" }}>
-            <p className="eyebrow" style={{ marginBottom: "0.5rem" }}>TEXT RECOGNITION (OCR)</p>
-            <button id="btn-ocr-read" className="secondary-button" onClick={() => void handleOcrRead()} disabled={ocrLoading || camState !== "ready"} style={{ marginBottom: "0.5rem" }}>
-              <AppIcon name="ocr" /> {ocrLoading ? "Reading…" : "Read text in frame"}
-            </button>
-            {ocrError && <p role="alert" style={{ fontSize: "0.8rem", color: "var(--color-careful, #e07b39)", margin: "0.25rem 0" }}>{ocrError}</p>}
-            {ocrResults.length > 0 && (
-              <ul style={{ listStyle: "none", padding: 0, margin: "0.5rem 0 0" }}>
-                {ocrResults.map((r, i) => (
-                  <li key={i} style={{ fontSize: "0.85rem", padding: "0.2rem 0", opacity: 0.9 }}>
-                    "{r.text}" <span style={{ opacity: 0.5 }}>({Math.round(r.confidence * 100)}%)</span>
-                  </li>
-                ))}
-              </ul>
+
+          {/* Detection summary strip */}
+          <div className={`lumi-detection-strip${detections.length === 0 ? " lumi-detection-empty" : ""}`}>
+            {detections.length === 0 ? (
+              <span className="lumi-det-label">
+                {camState === "ready" ? "Scanning environment..." : "Camera offline"}
+              </span>
+            ) : (
+              <>
+                <span className="lumi-det-label">Lumi sees</span>
+                <div className="lumi-det-tags">
+                  {detections.slice(0, 4).map((item) => (
+                    <span key={item.label + item.direction} className={`lumi-det-tag lumi-det-${item.level}`}>
+                      {item.label}
+                    </span>
+                  ))}
+                  {detections.length > 4 && <span className="lumi-det-more">+{detections.length - 4}</span>}
+                </div>
+                {detections[0]?.level === "danger" && (
+                  <span className="lumi-det-alert" aria-live="assertive">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true" width="13" height="13"><path d="M12 3 2 21h20z"/><path d="M12 9v5M12 17h.01"/></svg>
+                    {last}
+                  </span>
+                )}
+              </>
             )}
           </div>
-          <div className="speech-controls" style={{ marginTop: "1rem" }}>
-            <button id="btn-speak-last" onClick={() => { void speakText(last).catch(() => {}); speak(last, true) }} disabled={camState !== "ready"}>
-              <AppIcon name="volume" /> Repeat guidance
+
+          {/* Chat panel */}
+          <LumiChatPanel camReady={camState === "ready"} compact />
+
+          {/* OCR section */}
+          <div className="lumi-ocr-section">
+            <button
+              id="btn-ocr-read"
+              className="lumi-ocr-btn"
+              onClick={() => void handleOcrRead()}
+              disabled={ocrLoading || camState !== "ready"}
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                <rect x="3" y="5" width="18" height="14" rx="2" /><path d="M7 9h10M7 12h6M7 15h8" />
+              </svg>
+              {ocrLoading ? "Reading text..." : "Read text in frame"}
             </button>
-            <button id="btn-stop-speech" onClick={stopSpeaking}><AppIcon name="stop" /> Stop</button>
+            {ocrError && <p className="lumi-ocr-error" role="alert">{ocrError}</p>}
+            {ocrResults.length > 0 && (
+              <div className="lumi-ocr-results">
+                {ocrResults.map((r, i) => (
+                  <div key={i} className="lumi-ocr-item">
+                    <span className="lumi-ocr-text">"{r.text}"</span>
+                    <span className="lumi-ocr-conf">{Math.round(r.confidence * 100)}%</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
+
         </aside>
       </div>
     </div>
@@ -372,9 +579,8 @@ export function LivePage() {
 }
 
 // â”€â”€â”€ AskPage â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-type Chat = { from: "you" | "lumi"; text: string }
-const chatKey = "sight-companion:chats"
 export function AskLumiPage() {
+  const chatKey = "sight-companion:chats"
   const [messages, setMessages] = useState<Chat[]>(() => {
     try { return JSON.parse(localStorage.getItem(chatKey) || "[]") } catch { return [] }
   })
