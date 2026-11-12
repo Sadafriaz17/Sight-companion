@@ -1,0 +1,2 @@
+image,source,shape,dtype,min,max,mean,avg_inference_s,fps,status
+grace_hopper.jpg,illustrative_sample_no_gt,"(600, 512)",uint8,0,255,142.4679,23.706029,0.042,ok

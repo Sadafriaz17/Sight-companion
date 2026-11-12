@@ -1,0 +1,105 @@
+{
+  "environment": {
+    "timestamp_utc": "2026-11-11T05:45:49.381649+00:00",
+    "python": "3.13.14",
+    "platform": "Windows-11-10.0.22000-SP0",
+    "processor": "Intel64 Family 6 Model 186 Stepping 3, GenuineIntel",
+    "machine": "AMD64",
+    "packages": {
+      "opencv-python": "5.0.0",
+      "numpy": "2.5.4",
+      "torch": "2.15.0+cpu",
+      "torch_cuda_available": false,
+      "torch_device": "cpu",
+      "ultralytics": "8.4.202",
+      "easyocr": "1.7.2",
+      "transformers": "5.22.1",
+      "matplotlib": "3.11.2",
+      "psutil": "7.2.2"
+    },
+    "ai_dir": "D:\\Sight_Companion\\Sight-companion-ai",
+    "system": {
+      "cpu_count_logical": 12,
+      "cpu_count_physical": 10,
+      "ram_total_gb": 7.64
+    },
+    "component_config": {
+      "library": "EasyOCR",
+      "language": [
+        "en"
+      ],
+      "confidence_threshold": 0.45,
+      "execution": "cpu",
+      "gpu_flag_passed_to_reader": false
+    }
+  },
+  "performance": {
+    "images_evaluated": 1,
+    "image_source": "illustrative_sample_no_gt",
+    "avg_inference_s_per_image": 5.210918,
+    "fps": 0.192,
+    "average_ocr_confidence": 0.0,
+    "text_detection_success_rate": 0.0
+  },
+  "synthetic_microtest": {
+    "status": "reproduced_functional_microtest",
+    "note": "4 clean synthetic rendered words only; NOT sufficient evidence of real-world OCR accuracy.",
+    "exact_match_accuracy": 1.0,
+    "cases": 4,
+    "details": [
+      {
+        "ground_truth": "EXIT",
+        "recognized": "EXIT",
+        "confidence": 0.9991700649261475,
+        "exact_match_case_insensitive": true
+      },
+      {
+        "ground_truth": "STOP",
+        "recognized": "STOP",
+        "confidence": 0.9999247789382935,
+        "exact_match_case_insensitive": true
+      },
+      {
+        "ground_truth": "OPEN",
+        "recognized": "OPEN",
+        "confidence": 0.9997739791870117,
+        "exact_match_case_insensitive": true
+      },
+      {
+        "ground_truth": "CAFE",
+        "recognized": "CAFE",
+        "confidence": 0.9999233484268188,
+        "exact_match_case_insensitive": true
+      }
+    ]
+  },
+  "ground_truth_metrics": {
+    "status": "pending_missing_ground_truth",
+    "reason": "No OCR reference transcripts/ground truth found in evaluation/dataset/ocr for custom images. CER/WER/exact-match accuracy cannot be legitimately computed from model output alone.",
+    "CER": "N/A",
+    "WER": "N/A",
+    "exact_match_accuracy": "N/A",
+    "text_detection_success_rate_note": 0.0
+  },
+  "per_image": [
+    {
+      "image": "grace_hopper.jpg",
+      "source": "illustrative_sample_no_gt",
+      "category": "uncategorized",
+      "recognized_text": "",
+      "reference_text": "",
+      "items_detected": 0,
+      "detection_success": 0,
+      "avg_confidence": 0.0,
+      "avg_inference_s": 5.210918,
+      "fps": 0.192,
+      "CER": "N/A",
+      "WER": "N/A",
+      "exact_match": "N/A",
+      "status": "ok"
+    }
+  ],
+  "plots": {
+    "ocr_latency": "D:\\Sight_Companion\\Sight-companion-ai\\evaluation\\plots\\ocr_latency.png"
+  }
+}

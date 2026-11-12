@@ -1,0 +1,4 @@
+frame,index,detections,ocr_items,instructions,total_s,status
+grace_hopper.jpg,0,2,0,2,8.468116,ok
+grace_hopper.jpg,1,2,0,0,2.754916,ok
+grace_hopper.jpg,2,2,0,2,2.449781,ok

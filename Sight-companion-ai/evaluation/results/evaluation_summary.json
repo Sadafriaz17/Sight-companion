@@ -1,0 +1,71 @@
+{
+  "generated_utc": "2026-11-11T05:41:17.741786+00:00",
+  "notes": "Genuine, reproducible measurements from executed scripts on available data. No ground-truth annotations found for accuracy metrics (mAP/PR/F1, depth MAE/RMSE/AbsRel/deltas, OCR CER/WER/exact-match on real data) -> N/A/pending. Synthetic OCR micro-test is preliminary only.",
+  "detection": {
+    "latency_s_avg": 9.803548,
+    "fps": 0.102,
+    "mAP50": "N/A",
+    "mAP50_95": "N/A",
+    "precision": "N/A",
+    "recall": "N/A",
+    "f1": "N/A",
+    "gt_status": "pending_missing_ground_truth"
+  },
+  "depth": {
+    "latency_s_avg": 23.706029,
+    "fps": 0.042,
+    "MAE": "N/A",
+    "RMSE": "N/A",
+    "AbsRel": "N/A",
+    "gt_status": "pending_missing_or_incompatible_ground_truth",
+    "representation": "relative_inverse_depth_normalized_per_frame_to_uint8_0_255"
+  },
+  "ocr": {
+    "latency_s_avg": 5.210918,
+    "fps": 0.192,
+    "avg_confidence": 0.0,
+    "CER": "N/A",
+    "WER": "N/A",
+    "exact_match_gt": "N/A",
+    "synthetic_microtest_exact_match": 1.0,
+    "gt_status": "pending_missing_ground_truth"
+  },
+  "end_to_end": {
+    "total_latency_s_avg": 4.557604533309738,
+    "fps": 0.21941350827861292,
+    "cpu_percent_avg": 83.63333333333334,
+    "rss_mb_avg": 420.03515625,
+    "failures": 0
+  },
+  "environment": {
+    "timestamp_utc": "2026-11-11T05:41:17.741786+00:00",
+    "python": "3.13.14",
+    "platform": "Windows-11-10.0.22000-SP0",
+    "processor": "Intel64 Family 6 Model 186 Stepping 3, GenuineIntel",
+    "machine": "AMD64",
+    "packages": {
+      "opencv-python": "5.0.0",
+      "numpy": "2.5.4",
+      "torch": "2.15.0+cpu",
+      "torch_cuda_available": false,
+      "torch_device": "cpu",
+      "ultralytics": "8.4.202",
+      "easyocr": "1.7.2",
+      "transformers": "5.22.1",
+      "matplotlib": "3.11.2",
+      "psutil": "7.2.2"
+    },
+    "ai_dir": "D:\\Sight_Companion\\Sight-companion-ai",
+    "system": {
+      "cpu_count_logical": 12,
+      "cpu_count_physical": 10,
+      "ram_total_gb": 7.64
+    },
+    "component_config": {
+      "model": "YOLOv8s (Ultralytics)",
+      "weights": "D:\\Sight_Companion\\Sight-companion-ai\\yolov8s.pt",
+      "conf_thresh_config": 0.25,
+      "classes": 80
+    }
+  }
+}

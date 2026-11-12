@@ -1,0 +1,2 @@
+image,source,detections,avg_inference_s,fps,top_labels,status
+grace_hopper.jpg,illustrative_sample_no_gt,2,9.803548,0.102,person:0.896;tie:0.326,ok

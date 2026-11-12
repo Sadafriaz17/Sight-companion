@@ -1,0 +1,95 @@
+{
+  "environment": {
+    "timestamp_utc": "2026-11-11T05:41:48.502583+00:00",
+    "python": "3.13.14",
+    "platform": "Windows-11-10.0.22000-SP0",
+    "processor": "Intel64 Family 6 Model 186 Stepping 3, GenuineIntel",
+    "machine": "AMD64",
+    "packages": {
+      "opencv-python": "5.0.0",
+      "numpy": "2.5.4",
+      "torch": "2.15.0+cpu",
+      "torch_cuda_available": false,
+      "torch_device": "cpu",
+      "ultralytics": "8.4.202",
+      "easyocr": "1.7.2",
+      "transformers": "5.22.1",
+      "matplotlib": "3.11.2",
+      "psutil": "7.2.2"
+    },
+    "ai_dir": "D:\\Sight_Companion\\Sight-companion-ai",
+    "system": {
+      "cpu_count_logical": 12,
+      "cpu_count_physical": 10,
+      "ram_total_gb": 7.64
+    },
+    "component_config": {
+      "model": "LiheYoung/depth-anything-small-hf",
+      "input_infer_size_w_h": [
+        320,
+        240
+      ],
+      "output_representation": "relative_inverse_depth_normalized_per_frame_to_uint8_0_255",
+      "normalization": "per-frame min-max to [0,255] in DepthEstimator.estimate (not metric, not globally calibrated)",
+      "very_close_thresh": 179,
+      "close_thresh": 115,
+      "thresholds_experimentally_validated": false,
+      "thresholds_note": "Heuristic config values; no measured-distance calibration/validation dataset found in repo."
+    }
+  },
+  "performance": {
+    "images_evaluated": 1,
+    "image_source": "illustrative_sample_no_gt",
+    "avg_inference_s_per_image": 23.706029,
+    "fps": 0.042
+  },
+  "representation_and_thresholds": {
+    "model": "LiheYoung/depth-anything-small-hf",
+    "input_infer_size_w_h": [
+      320,
+      240
+    ],
+    "output_representation": "relative_inverse_depth_normalized_per_frame_to_uint8_0_255",
+    "normalization": "per-frame min-max to [0,255] in DepthEstimator.estimate (not metric, not globally calibrated)",
+    "very_close_thresh": 179,
+    "close_thresh": 115,
+    "thresholds_experimentally_validated": false,
+    "thresholds_note": "Heuristic config values; no measured-distance calibration/validation dataset found in repo."
+  },
+  "consistency": {
+    "per_frame_normalization_effect": "Each estimate() min-max normalizes independently to 0-255, so identical real distances can map to different values across frames/scenes; temporal consistency is not guaranteed without calibration/global scaling.",
+    "normalized_mean_std_across_evaluated_frames": null,
+    "frames_compared": 1
+  },
+  "ground_truth_metrics": {
+    "status": "pending_missing_or_incompatible_ground_truth",
+    "reason": "Depth ground-truth directory is empty; no compatible metric/annotated depth data available.",
+    "MAE": "N/A",
+    "RMSE": "N/A",
+    "AbsRel": "N/A",
+    "SqRel": "N/A",
+    "LogRMSE": "N/A",
+    "delta1_25": "N/A",
+    "delta1_25_2": "N/A",
+    "delta1_25_3": "N/A",
+    "threshold_classification_eval": "N/A (no measured-distance labeled samples)"
+  },
+  "per_image": [
+    {
+      "image": "grace_hopper.jpg",
+      "source": "illustrative_sample_no_gt",
+      "shape": "(600, 512)",
+      "dtype": "uint8",
+      "min": 0,
+      "max": 255,
+      "mean": 142.4679,
+      "avg_inference_s": 23.706029,
+      "fps": 0.042,
+      "status": "ok"
+    }
+  ],
+  "plots": {
+    "depth_latency": "D:\\Sight_Companion\\Sight-companion-ai\\evaluation\\plots\\depth_latency.png",
+    "depth_sample_map": "D:\\Sight_Companion\\Sight-companion-ai\\evaluation\\plots\\depth_sample_map.png"
+  }
+}

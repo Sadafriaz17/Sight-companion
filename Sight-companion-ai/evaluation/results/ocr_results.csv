@@ -1,0 +1,2 @@
+image,source,category,recognized_text,reference_text,items_detected,detection_success,avg_confidence,avg_inference_s,fps,CER,WER,exact_match,status
+grace_hopper.jpg,illustrative_sample_no_gt,uncategorized,,,0,0,0.0,5.210918,0.192,N/A,N/A,N/A,ok
