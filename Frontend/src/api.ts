@@ -403,11 +403,15 @@ export async function updateProfile(updates: Partial<Profile>): Promise<Profile 
 // ─── Preferences ─────────────────────────────────────────────────────────────
 
 export async function getPreferences(): Promise<Preferences | null> {
+  const authSession = await supabase?.auth.getSession()
+  if (!authSession?.data?.session?.access_token) return null
   const data = await get<{ preferences: Preferences }>("/api/preferences")
   return data?.preferences ?? null
 }
 
 export async function updatePreferences(prefs: Partial<Preferences>): Promise<Preferences | null> {
+  const authSession = await supabase?.auth.getSession()
+  if (!authSession?.data?.session?.access_token) return null
   const data = await put<{ preferences: Preferences }>("/api/preferences", prefs)
   return data?.preferences ?? null
 }
