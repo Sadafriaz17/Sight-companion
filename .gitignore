@@ -33,3 +33,5 @@ Frontend/.opencode-skills/
 *.pt
 *.pth
 *.onnx
+
+Backend/yolov8s.pt
