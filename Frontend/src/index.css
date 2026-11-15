@@ -1443,3 +1443,71 @@ html[data-contrast="high"] .lcp-bubble-lumi .lcp-bubble-text { background: #e8de
   .lumi-panel-header { min-width: 0; }
   .lcp, .lumi-ocr-section { min-width: 0; }
 }
+
+
+/* Final responsive cleanup for every viewport */
+#root { width: 100%; min-width: 0; overflow-x: hidden; }
+.camera-action-row button svg,
+.camera-action-row button > svg {
+  width: 24px !important;
+  height: 24px !important;
+  min-width: 24px;
+  max-width: 24px;
+  flex: 0 0 24px;
+  display: inline-block;
+}
+.camera-action-row button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+}
+.real-camera .detection-overlay {
+  position: absolute;
+  z-index: 3;
+  pointer-events: none;
+  object-fit: fill;
+}
+
+@media (min-width: 1400px) {
+  .live-new-grid { grid-template-columns: minmax(0, 1.45fr) minmax(380px, .75fr); }
+  .real-camera { min-height: clamp(500px, 45vw, 680px); }
+}
+
+@media (min-width: 901px) and (max-width: 1199px) {
+  .app-shell { grid-template-columns: 220px minmax(0, 1fr); }
+  .sidebar { width: 220px; padding-inline: 15px; }
+  .page { padding-inline: 24px; }
+  .live-new-grid { grid-template-columns: minmax(0, 1fr); }
+  .real-camera { aspect-ratio: 16 / 10; min-height: 0; }
+}
+
+@media (max-width: 900px) {
+  .account-bar { min-height: 62px; }
+  .tool-page { padding-top: 16px; }
+  .tool-head { margin-bottom: 14px; }
+  .live-new-grid { grid-template-columns: minmax(0, 1fr); }
+  .real-camera { min-height: 0; aspect-ratio: 4 / 3; }
+  .lumi-panel { min-height: 0; }
+}
+
+@media (max-width: 480px) {
+  html { font-size: 16px; }
+  .page { padding-inline: 10px; }
+  .account-bar { padding-inline: 10px; }
+  .account-bar > button { max-width: 70%; }
+  .tool-head { padding: 18px 16px; border-radius: 20px; }
+  .tool-head h1 { font-size: clamp(30px, 10vw, 36px); }
+  .tool-head p { font-size: 14px; }
+  .real-camera { aspect-ratio: 4 / 3; border-radius: 14px; }
+  .camera-state { padding: 18px 12px; }
+  .camera-state svg { width: 38px; height: 38px; }
+  .camera-state h2 { font-size: 19px; }
+  .camera-state p { font-size: 13px; }
+  .camera-action-row { display: grid; grid-template-columns: 1fr; gap: 8px; padding: 10px; }
+  .camera-action-row button { width: 100%; height: auto; min-height: 48px; padding-inline: 12px; }
+  .lumi-panel-header { padding-inline: 13px; }
+  .lumi-detection-strip { padding-inline: 13px; }
+}
