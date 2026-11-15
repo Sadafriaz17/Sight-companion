@@ -181,6 +181,8 @@ class _State:
 
         # Stop event for camera thread
         self.stop_event: threading.Event = threading.Event()
+        self.inference_lock = threading.Lock()
+        self.last_frame_shape: tuple[int, int] | None = None
 
     # ------------------------------------------------------------------
     # Thread-safe accessors
@@ -345,6 +347,63 @@ class _AIComponents:
 
 
 # ---------------------------------------------------------------------------
+# Browser frame inference
+def _directional_guidance(name: str, distance: str, direction: str) -> str:
+    """Turn an object position into a short blind-assistance safety instruction."""
+    noun = name.capitalize()
+    if direction == "on your left":
+        return f"{noun} {distance.lower()} on your left. Step to your right."
+    if direction == "on your right":
+        return f"{noun} {distance.lower()} on your right. Step to your left."
+    if distance == "Very Close":
+        return "Obstacle very close ahead. Stop and step carefully to either side."
+    if distance == "Close":
+        return f"{noun} close ahead. Slow down and step carefully to either side."
+    return f"{noun} ahead. Continue carefully."
+
+
+def _process_browser_frame(frame: np.ndarray, user_id: Optional[str], token: Optional[str]) -> dict:
+    """Run the existing AI pipeline on a JPEG frame submitted by the browser."""
+    if not _AIComponents.initialise():
+        raise RuntimeError(_AIComponents.error or "AI initialisation failed.")
+    height, width = frame.shape[:2]
+    with _state.inference_lock:
+        detections = _AIComponents.detector.detect(frame)
+        depth_map = None
+        if _AIComponents.depth_estimator is not None:
+            try:
+                depth_map = _AIComponents.depth_estimator.estimate(frame)
+            except Exception as exc:
+                log.warning("Depth error: %s", exc)
+        if depth_map is None:
+            depth_map = np.zeros((height, width), dtype=np.uint8)
+        ocr_results = []
+        if _AIComponents.ocr_reader is not None:
+            try:
+                ocr_results = _AIComponents.ocr_reader.read_text(frame)
+            except Exception as exc:
+                log.warning("OCR error: %s", exc)
+        instructions = _AIComponents.nav_engine.evaluate(detections, depth_map, ocr_results, width)
+        enriched = []
+        for det in detections:
+            box = det.get("box", [0, 0, 0, 0])
+            distance = _AIComponents.nav_engine._get_depth_level(depth_map, box)
+            direction = _AIComponents.nav_engine._get_spatial_zone(box, width)
+            level = "danger" if distance == "Very Close" else "careful" if distance == "Close" else "safe"
+            enriched.append({**det, "distance": distance, "direction": direction, "level": level, "message": _directional_guidance(det.get("name", "object"), distance, direction)})
+        encoded, jpeg_buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        if encoded:
+            _state.update_results(bytes(jpeg_buffer), enriched, ocr_results, instructions)
+        with _state._lock:
+            _state.frame_width = width
+            _state.last_frame_shape = (width, height)
+        if user_id and token and supabase_configured() and enriched:
+            rows = [{"label": d.get("name", "object"), "confidence": d.get("confidence", 0.0), "distance": d.get("distance", "N/A"), "direction": d.get("direction", "ahead"), "level": d.get("level", "safe"), "message": d.get("message", ""), "box": d.get("box", [])} for d in enriched[:5]]
+            _enqueue(lambda u=user_id, t=token, r=rows: _persist_detections(u, t, r))
+        if user_id and token and supabase_configured() and ocr_results:
+            _enqueue(lambda u=user_id, t=token, r=ocr_results: _persist_ocr(u, t, r))
+        return {"ok": True, "width": width, "height": height, "detections": enriched, "ocr": [{"text": o.get("text", ""), "confidence": round(float(o.get("confidence", 0.0)), 3), "box": o.get("box", [])} for o in ocr_results], "instructions": instructions}
+
 # Camera capture + AI inference loop (runs in a dedicated daemon thread)
 # ---------------------------------------------------------------------------
 
@@ -665,6 +724,7 @@ def status():
             } if _AIComponents.initialised else {},
         },
         "camera": {
+            "mode": "browser",
             "running": snap["camera_running"],
             "error": snap["camera_error"],
             "frames_processed": snap["frame_count"],
@@ -683,35 +743,48 @@ def status():
 
 @app.post("/api/camera/start")
 def camera_start():
-    """Start the camera capture + AI inference loop."""
+    """Register a browser-camera session; the browser owns the physical device camera."""
     user_id, token = _require_auth()
-    if _state.camera_running:
-        return _ok(message="Camera already running.")
-    _start_camera_thread(user_id=user_id, token=token)
-    # Log camera start as activity
+    with _state._lock:
+        _state.camera_running = True
+        _state.camera_error = None
+        _state.current_user_id = user_id
+        _state.current_token = token
     if user_id and token and supabase_configured():
-        _enqueue(lambda u=user_id, t=token: _persist_activity(u, t, {
-            "type": "session",
-            "title": "Camera started",
-            "metadata": {"event": "camera_start"},
-        }))
-    return _ok(message="Camera starting.")
-
-
+        _enqueue(lambda u=user_id, t=token: _persist_activity(u, t, {"type": "session", "title": "Camera started", "metadata": {"event": "camera_start"}}))
+    return _ok(message="Browser camera ready for frames.", camera_mode="browser")
 @app.post("/api/camera/stop")
 def camera_stop():
-    """Stop camera capture and release resources."""
+    """End the browser-camera session; no server webcam is accessed."""
     user_id, token = _require_auth()
     if user_id and token and supabase_configured():
-        _enqueue(lambda u=user_id, t=token: _persist_activity(u, t, {
-            "type": "session",
-            "title": "Camera stopped",
-            "metadata": {"event": "camera_stop"},
-        }))
-    _stop_camera_thread()
+        _enqueue(lambda u=user_id, t=token: _persist_activity(u, t, {"type": "session", "title": "Camera stopped", "metadata": {"event": "camera_stop"}}))
+    with _state._lock:
+        _state.camera_running = False
+        _state.latest_jpeg = None
+        _state.current_user_id = None
+        _state.current_token = None
     return _ok(message="Camera stopped.")
-
-
+@app.post("/api/camera/frame")
+def camera_frame_upload():
+    """Process one JPEG frame captured by the visitor's browser camera."""
+    if not _state.camera_running:
+        return _err("Camera session is not active. Start the camera first.", 409)
+    upload = request.files.get("frame")
+    if upload is None:
+        return _err("A multipart frame file is required.")
+    raw = upload.read()
+    if not raw or len(raw) > 8 * 1024 * 1024:
+        return _err("Frame is empty or too large.", 413)
+    frame = cv2.imdecode(np.frombuffer(raw, dtype=np.uint8), cv2.IMREAD_COLOR)
+    if frame is None:
+        return _err("Could not decode the camera frame.", 400)
+    try:
+        return jsonify(_process_browser_frame(frame, _state.current_user_id, _state.current_token))
+    except Exception as exc:
+        log.exception("Browser frame inference failed")
+        _state.camera_error = str(exc)
+        return _err("AI inference failed. Check backend model availability.", 503)
 @app.get("/api/camera/frame")
 def camera_frame():
     """Return the latest annotated frame as a JPEG image."""
@@ -747,78 +820,22 @@ def get_detections():
         message    — human-readable summary sentence
     """
     raw = _state.get_detections()
-    depth_for_ui = None
-    if _AIComponents.initialised and _AIComponents.depth_estimator is not None:
-        # We don't have the depth map here; use nav_engine cooldown data
-        pass
-
     results = []
     for det in raw:
-        name = det.get("name", "object")
-        conf = det.get("confidence", 0.0)
-        box = det.get("box", [0, 0, 1, 1])
-
-        # Derive direction from box if nav_engine available
-        direction = "ahead"
-        if _AIComponents.nav_engine:
-            try:
-                # Use stored instruction text as direction hint — approximate
-                # We compute it again here for the API response
-                engine = _AIComponents.nav_engine
-                # Access protected method for API response only
-                snap_instructions = _state.get_instructions()
-                # Fallback direction from box center
-                if len(box) == 4:
-                    center_x = (box[0] + box[2]) / 2.0
-                    # We don't have width here; assume 640 default
-                    # The nav_engine result is more accurate but lives in instructions
-                    direction = "ahead"  # will be overridden by message below
-            except Exception:
-                pass
-
-        # Determine distance label from cached instructions / detection proximity
-        depth_label = "N/A"
-        level = "safe"
-        instructions = _state.get_instructions()
-
-        # Match against instruction text for this object
-        for instr in instructions:
-            lower = instr.lower()
-            if name.lower() in lower:
-                if "very close" in lower:
-                    depth_label = "Very Close"
-                    level = "danger"
-                elif "close" in lower or "careful" in lower:
-                    depth_label = "Close"
-                    level = "careful"
-                break
-
-        # Build a readable direction from bounding box
-        if box and len(box) == 4:
-            center_x = (box[0] + box[2]) / 2.0
-            width = _state.frame_width or 640
-            third = width / 3.0
-            if center_x < third:
-                direction = "on your left"
-            elif center_x > 2 * third:
-                direction = "on your right"
-            else:
-                direction = "ahead"
-
-        message = f"{name.capitalize()} {direction}."
-        if depth_label != "N/A":
-            message = f"{name.capitalize()} {direction}. {depth_label}."
-
+        name = det.get("name", det.get("label", "object"))
+        distance = det.get("distance", "N/A")
+        direction = det.get("direction", "ahead")
+        message = det.get("message") or _directional_guidance(name, distance, direction)
         results.append({
             "label": name,
-            "confidence": round(conf, 3),
-            "box": box,
-            "distance": depth_label,
+            "name": name,
+            "confidence": round(float(det.get("confidence", 0.0)), 3),
+            "box": det.get("box", [0, 0, 1, 1]),
+            "distance": distance,
             "direction": direction,
-            "level": level,
+            "level": det.get("level", "safe"),
             "message": message,
         })
-
     return jsonify(results)
 
 

@@ -58,10 +58,14 @@ class NavigationEngine:
         for name, depth_lvl, pos in hazards:
             key = f"{name}_{pos}"
             if key not in self.last_announced or (current_time - self.last_announced[key] > config.COOLDOWN_SECONDS):
-                if depth_lvl == "Very Close" and pos == "ahead":
-                    instructions.append("Obstacle very close ahead. Step aside.")
+                if pos == "on your left":
+                    instructions.append(f"{name.capitalize()} {depth_lvl.lower()} on your left. Step to your right.")
+                elif pos == "on your right":
+                    instructions.append(f"{name.capitalize()} {depth_lvl.lower()} on your right. Step to your left.")
+                elif depth_lvl == "Very Close":
+                    instructions.append("Obstacle very close ahead. Stop and step carefully to either side.")
                 else:
-                    instructions.append(f"{name.capitalize()} {pos}.")
+                    instructions.append(f"{name.capitalize()} {depth_lvl.lower()} ahead. Slow down and step carefully to either side.")
                 self.last_announced[key] = current_time
 
         # 2. Text/Sign Alerts (Only if no collision risk)
