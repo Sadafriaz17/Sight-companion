@@ -4,9 +4,8 @@
  * The backend base URL comes from the .env file (VITE_API_URL).
  * Falls back to http://localhost:5000 when the env var is not set.
  *
- * The backend owns the camera (Python/OpenCV). The browser does NOT
- * access the webcam directly — it displays the annotated MJPEG stream
- * served by the Flask backend at /api/camera/stream.
+ * The browser owns the physical camera. It captures frames locally and
+ * sends them to Flask for the existing YOLO/depth/OCR pipeline.
  */
 
 import { guestSession, type Session } from "./auth.ts"
@@ -35,20 +34,29 @@ export const getApiBase = () => resolvedApiBase
 // Back-compat export (static at module init); prefer getApiBase() for display after probing.
 export let API_BASE = resolvedApiBase
 
-// Stream/frame URLs are derived at use time via helpers to follow resolved base.
-export const streamUrl = () => `${getApiBase()}/api/camera/stream`
+// Frame URLs are derived at use time via helpers to follow resolved base.
 export const frameUrl = () => `${getApiBase()}/api/camera/frame`
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export type DetectionResult = {
   label: string
+  name?: string
   confidence: number
   box: [number, number, number, number]
   distance: string
   direction: string
   level: "safe" | "careful" | "danger"
   message: string
+}
+
+export type FrameInferenceResult = {
+  ok: boolean
+  width: number
+  height: number
+  detections: DetectionResult[]
+  ocr: OcrResult[]
+  instructions: string[]
 }
 
 export type ActivityItem = {
@@ -180,6 +188,22 @@ async function put<T>(path: string, body?: unknown, opts?: { timeoutMs?: number;
   }
 }
 
+async function uploadFrame<T>(path: string, blob: Blob): Promise<T | null> {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 30000)
+  try {
+    const form = new FormData()
+    form.append("frame", blob, "camera-frame.jpg")
+    const res = await fetch(`${getApiBase()}${path}`, { method: "POST", headers: await getAuthHeaders(), body: form, signal: controller.signal })
+    if (!res.ok) return null
+    return (await res.json()) as T
+  } catch {
+    return null
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
 function wait(ms = 450) {
   return new Promise<void>((resolve) => window.setTimeout(resolve, ms))
 }
@@ -257,6 +281,10 @@ export async function startCamera(): Promise<{ ok: boolean; message?: string; er
 export async function stopCamera(): Promise<{ ok: boolean; message?: string }> {
   const data = await post<{ ok: boolean; message?: string }>("/api/camera/stop")
   return data ?? { ok: false, message: "Backend unreachable." }
+}
+
+export async function inferCameraFrame(blob: Blob): Promise<FrameInferenceResult | null> {
+  return uploadFrame<FrameInferenceResult>("/api/camera/frame", blob)
 }
 
 // ─── Detections ───────────────────────────────────────────────────────────────

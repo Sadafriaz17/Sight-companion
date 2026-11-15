@@ -1,26 +1,14 @@
 /**
- * AppPages.tsx â€” authenticated in-app pages
- *
- * LivePage architecture change
- * ----------------------------
- * The Python backend owns the physical camera (via OpenCV + YOLO).
- * The browser does NOT call getUserMedia() for the live feed.
- * Instead, LivePage:
- *   1. POSTs /api/camera/start  â†’ backend opens the camera + AI pipeline
- *   2. Displays  <img src={STREAM_URL}>  â†’ backend MJPEG stream
- *   3. Polls     /api/detections  every 2 s for structured results
- *   4. POSTs /api/camera/stop   when the user turns the camera off
- *
- * This avoids the "Camera access is blocked" error that occurred when both
- * the browser AND the Python process tried to open the same webcam.
+ * Authenticated application pages. LivePage owns the visitor's device camera
+ * in the browser and sends sampled JPEG frames to Flask for real AI inference.
  */
 import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react"
 import {
-  streamUrl,
   getApiBase,
   startCamera,
   stopCamera,
   getDetectionResults,
+  inferCameraFrame,
   getDetectionResultsSync,
   triggerOcrRead,
   toggleSpeech,
@@ -33,6 +21,7 @@ import {
   type OcrResult,
 } from "./api"
 import { type Preferences } from "./accessibility"
+import { preferenceKey, readPreferences } from "./accessibility"
 import { speak, stopSpeaking } from "./voice"
 import { PageLumi, goTo } from "./Pages"
 // â”€â”€â”€ Shared icon component â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -233,352 +222,158 @@ function LumiChatPanel({ camReady, compact }: { camReady: boolean; compact?: boo
 type CamState = "checking" | "backend-down" | "off" | "starting" | "ready" | "error"
 
 export function LivePage() {
-  const imgRef = useRef<HTMLImageElement>(null)
-  const [camState, setCamState] = useState<CamState>("checking")
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const streamRef = useRef<MediaStream | null>(null)
+  const frameBusyRef = useRef(false)
+  const lastSpokenRef = useRef("")
+  const lastSpokenAtRef = useRef(0)
+  const [camState, setCamState] = useState<CamState>("off")
   const [camError, setCamError] = useState("")
   const [backendUp, setBackendUp] = useState<boolean | null>(null)
-  const [streamError, setStreamError] = useState("")
-  const [streamKey, setStreamKey] = useState(0)
-
-  const camStateRef = useRef<CamState>("checking")
-  const startingRef = useRef(false)
-  useEffect(() => { camStateRef.current = camState }, [camState])
-
-  const [detections, setDetections] = useState<DetectionResult[]>(getDetectionResultsSync())
-  const [loadingDet, setLoadingDet] = useState(false)
+  const [frameError, setFrameError] = useState("")
+  const [detections, setDetections] = useState<DetectionResult[]>([])
   const [ocrResults, setOcrResults] = useState<OcrResult[]>([])
   const [ocrLoading, setOcrLoading] = useState(false)
   const [ocrError, setOcrError] = useState("")
   const [speechOn, setSpeechOn] = useState(true)
+  const [facingMode, setFacingMode] = useState<"user" | "environment">("environment")
 
-  const applyStatus = useCallback((s: BackendStatus | null) => {
-    if (!s) {
-      setBackendUp(false)
-      if (camStateRef.current !== "ready" && camStateRef.current !== "starting") {
-        setCamState("backend-down")
-      }
-      return
-    }
-    setBackendUp(true)
-    setSpeechOn(s.speech?.enabled ?? true)
-    const cam = s.camera
-    if (camStateRef.current === "starting") return
-    if (cam?.running) {
-      if (camStateRef.current !== "ready") {
-        setStreamKey(Date.now())
-        setStreamError("")
-        setCamState("ready")
-      }
-      return
-    }
-    if (cam?.error) {
-      setCamError(cam.error)
-      setCamState("error")
-      return
-    }
-    if (camStateRef.current === "ready") {
-      setCamState("off")
-    } else if (camStateRef.current === "checking" || camStateRef.current === "backend-down") {
-      setCamState("off")
-    }
+  const stopDeviceCamera = useCallback(() => {
+    streamRef.current?.getTracks().forEach((track) => track.stop())
+    streamRef.current = null
+    if (videoRef.current) videoRef.current.srcObject = null
   }, [])
 
-  useEffect(() => {
-    let cancelled = false
-    const check = async () => {
-      const s = await getBackendStatus()
-      if (!cancelled) applyStatus(s)
-    }
-    void check()
-    const interval = setInterval(() => { void check() }, 3000)
-    return () => { cancelled = true; clearInterval(interval) }
-  }, [applyStatus])
+  const startDeviceCamera = useCallback(async (mode = facingMode) => {
+    if (!navigator.mediaDevices?.getUserMedia) throw new Error("This browser does not support camera access.")
+    stopDeviceCamera()
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: mode }, width: { ideal: 1280 }, height: { ideal: 720 } },
+      audio: false,
+    })
+    streamRef.current = stream
+    if (!videoRef.current) throw new Error("Camera preview is unavailable.")
+    videoRef.current.srcObject = stream
+    await videoRef.current.play()
+  }, [facingMode, stopDeviceCamera])
+
+  const drawDetections = useCallback((items: DetectionResult[], sourceWidth: number, sourceHeight: number) => {
+    const canvas = canvasRef.current
+    const video = videoRef.current
+    if (!canvas || !video || !sourceWidth || !sourceHeight) return
+    const rect = video.getBoundingClientRect()
+    // Match CSS object-fit: cover: scale uniformly and account for cropped edges.
+    const scale = Math.max(rect.width / sourceWidth, rect.height / sourceHeight)
+    const offsetX = (rect.width - sourceWidth * scale) / 2
+    const offsetY = (rect.height - sourceHeight * scale) / 2
+    const dpr = window.devicePixelRatio || 1
+    canvas.width = Math.max(1, Math.round(rect.width * dpr))
+    canvas.height = Math.max(1, Math.round(rect.height * dpr))
+    canvas.style.width = `${rect.width}px`
+    canvas.style.height = `${rect.height}px`
+    const ctx = canvas.getContext("2d")
+    if (!ctx) return
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    ctx.clearRect(0, 0, rect.width, rect.height)
+    ctx.font = "600 14px system-ui, sans-serif"
+    items.forEach((item) => {
+      const [x1, y1, x2, y2] = item.box
+      const x = x1 * scale + offsetX, y = y1 * scale + offsetY, width = (x2 - x1) * scale, height = (y2 - y1) * scale
+      const color = item.level === "danger" ? "#ff6b6b" : item.level === "careful" ? "#ffc857" : "#70e3b2"
+      ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.strokeRect(x, y, width, height)
+      const label = `${item.label || item.name || "object"} ${Math.round(item.confidence * 100)}%`
+      const labelWidth = ctx.measureText(label).width + 14
+      ctx.fillStyle = color; ctx.fillRect(x, Math.max(0, y - 26), labelWidth, 24)
+      ctx.fillStyle = "#211a2c"; ctx.fillText(label, x + 7, Math.max(17, y - 9))
+    })
+  }, [])
+
+  const sendFrame = useCallback(async () => {
+    const video = videoRef.current
+    if (!video || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || frameBusyRef.current) return
+    const capture = document.createElement("canvas")
+    const maxWidth = 960
+    const scale = Math.min(1, maxWidth / video.videoWidth)
+    capture.width = Math.max(1, Math.round(video.videoWidth * scale))
+    capture.height = Math.max(1, Math.round(video.videoHeight * scale))
+    capture.getContext("2d")?.drawImage(video, 0, 0, capture.width, capture.height)
+    frameBusyRef.current = true
+    await new Promise<void>((resolve) => capture.toBlob(async (blob) => {
+      if (blob) {
+        const result = await inferCameraFrame(blob)
+        if (result?.ok) {
+          setFrameError("")
+          setDetections(result.detections)
+          drawDetections(result.detections, result.width, result.height)
+          const priority = [...result.detections].sort((a, b) => {
+            const rank = (level: DetectionResult["level"]) => level === "danger" ? 0 : level === "careful" ? 1 : 2
+            return rank(a.level) - rank(b.level)
+          })[0]
+          const now = Date.now()
+          if (priority && (priority.message !== lastSpokenRef.current || now - lastSpokenAtRef.current > 6000) && now - lastSpokenAtRef.current > 3500) {
+            lastSpokenRef.current = priority.message
+            lastSpokenAtRef.current = now
+            speak(priority.message)
+          }
+        } else {
+          setFrameError("Frame inference is unavailable. Check the Flask backend and its AI model logs.")
+        }
+      }
+      frameBusyRef.current = false; resolve()
+    }, "image/jpeg", 0.72))
+  }, [drawDetections])
 
   useEffect(() => {
     if (camState !== "ready") return
-    let cancelled = false
-    const poll = async () => {
-      setLoadingDet(true)
-      const fresh = await getDetectionResults()
-      if (!cancelled) {
-        setDetections(fresh)
-        setLoadingDet(false)
-      }
-    }
-    void poll()
-    const iv = window.setInterval(() => { void poll() }, 2000)
-    return () => { cancelled = true; clearInterval(iv) }
-  }, [camState])
+    const timer = window.setInterval(() => void sendFrame(), 700)
+    return () => window.clearInterval(timer)
+  }, [camState, sendFrame])
 
-  useEffect(() => {
-    return () => {
-      if (camStateRef.current === "ready" || camStateRef.current === "starting") {
-        void stopCamera()
-      }
-    }
-  }, [])
+  useEffect(() => () => { stopDeviceCamera(); void stopCamera() }, [stopDeviceCamera])
 
   const handleStartCamera = async () => {
-    if (startingRef.current) return
-    startingRef.current = true
-    setCamState("starting")
-    setCamError("")
-    setStreamError("")
-
-    const pre = await getBackendStatus()
-    if (!pre) {
-      setBackendUp(false)
-      setCamState("backend-down")
-      startingRef.current = false
-      return
-    }
+    setCamState("starting"); setCamError("")
+    const status = await getBackendStatus()
+    if (!status) { setBackendUp(false); setCamState("backend-down"); setCamError(`Cannot reach ${getApiBase()}.`); return }
     setBackendUp(true)
-
-    const res = await startCamera()
-    if (!res.ok) {
-      setCamError(res.error || res.message || "Camera start request failed.")
-      if (res.message === "Backend unreachable.") setCamState("backend-down")
-      else setCamState("error")
-      startingRef.current = false
-      return
-    }
-
-    const deadline = Date.now() + 60000
-    while (Date.now() < deadline) {
-      await new Promise<void>((r) => setTimeout(r, 1200))
-      const s = await getBackendStatus()
-      if (!s) {
-        setBackendUp(false)
-        setCamError("Lost connection to backend while starting the camera.")
-        setCamState("error")
-        startingRef.current = false
-        return
-      }
-      setBackendUp(true)
-      if (s.camera?.error) {
-        setCamError(s.camera.error)
-        setCamState("error")
-        startingRef.current = false
-        return
-      }
-      if (s.camera?.running) {
-        setStreamKey(Date.now())
-        setCamState("ready")
-        startingRef.current = false
-        return
-      }
-    }
-    const lastStatus = await getBackendStatus()
-    if (lastStatus?.camera?.running) {
-      setStreamKey(Date.now())
-      setCamState("ready")
-    } else if (lastStatus?.camera?.error) {
-      setCamError(lastStatus.camera.error)
-      setCamState("error")
-    } else {
-      setCamError("Camera did not report ready in time. The backend may still be loading AI models; check the backend terminal and try again.")
-      setCamState("error")
-    }
-    startingRef.current = false
+    const registered = await startCamera()
+    if (!registered.ok) { setCamState("error"); setCamError(registered.error || registered.message || "Could not start the camera session."); return }
+    try { await startDeviceCamera(); setCamState("ready") }
+    catch (error) { await stopCamera(); setCamState("error"); setCamError(error instanceof DOMException && error.name === "NotAllowedError" ? "Camera permission was denied. Allow camera access in your browser and try again." : error instanceof Error ? error.message : "The camera could not be started.") }
   }
-
-  const handleStopCamera = async () => {
-    startingRef.current = false
-    await stopCamera()
-    setDetections([])
-    setOcrResults([])
-    setStreamError("")
-    setCamState("off")
+  const handleStopCamera = async () => { stopDeviceCamera(); await stopCamera(); setDetections([]); setOcrResults([]); setFrameError(""); setCamState("off") }
+  const handleSwitchCamera = async () => {
+    const next = facingMode === "environment" ? "user" : "environment"
+    setFacingMode(next)
+    if (camState === "ready") { try { await startDeviceCamera(next) } catch { setCamError("That camera is not available on this device.") } }
   }
-
-  const handleOcrRead = async () => {
-    setOcrLoading(true)
-    setOcrError("")
-    const res = await triggerOcrRead()
-    setOcrLoading(false)
-    if (res.ok) {
-      setOcrResults(res.results)
-      if (res.results.length === 0) setOcrError("No text found in the current frame.")
-    } else {
-      setOcrError("OCR failed. Make sure the camera is running.")
-    }
-  }
-
+  const handleOcrRead = async () => { setOcrLoading(true); setOcrError(""); const res = await triggerOcrRead(); setOcrLoading(false); if (res.ok) { setOcrResults(res.results); if (!res.results.length) setOcrError("No text found in the current frame.") } else setOcrError("OCR failed. Keep the camera running and try again.") }
   const handleSpeechToggle = async () => {
+    const next = !readPreferences().voiceOn
+    localStorage.setItem(preferenceKey, JSON.stringify({ ...readPreferences(), voiceOn: next }))
     const res = await toggleSpeech()
-    setSpeechOn(res.speech_enabled)
+    setSpeechOn(next && (res.ok ? res.speech_enabled : true))
   }
-
-  const last = detections[0]?.message ?? "No objects detected."
-
-  const stateLabel: Record<CamState, string> = {
-    checking: "Checking backend\u2026",
-    "backend-down": "Backend not reachable",
-    off: "Camera is off",
-    starting: "Starting camera\u2026",
-    ready: "Live",
-    error: "Camera error",
-  }
-  const stateHint: Record<CamState, string> = {
-    checking: `Contacting ${getApiBase()}\u2026`,
-    "backend-down": `Cannot reach ${getApiBase()}. Start the Flask backend, then connect again.`,
-    off: backendUp ? "Backend connected. The AI processes your camera on this machine. Frames are never uploaded." : `Contacting ${getApiBase()}\u2026`,
-    starting: "Opening the camera and loading AI models. This can take 10\u201330 seconds on first run.",
-    ready: streamError || "",
-    error: camError || "The camera could not start. Check the backend terminal and camera permissions.",
-  }
+  const stateLabel: Record<CamState, string> = { checking: "Checking backend…", "backend-down": "Backend not reachable", off: "Camera is off", starting: "Starting camera…", ready: "Live", error: "Camera error" }
   return (
     <div className="page tool-page">
-      <PageHead
-        title="Live view"
-        copy="Lumi sees through your camera and speaks what is nearby."
-        mood={camState === "ready" ? "listening" : "happy"}
-      />
+      <PageHead title="Live view" copy="Lumi sees through your device camera and speaks what is nearby." mood={camState === "ready" ? "listening" : "happy"} />
       <div className="live-new-grid">
         <section className="new-card camera-new">
-          <div className="camera-new-top">
-            <strong>AI Camera</strong>
-            {camState === "ready" && <span className="live-status">Live</span>}
-            {loadingDet && camState === "ready" && <span style={{ fontSize: "0.75rem", opacity: 0.6 }}>updating…</span>}
-            {backendUp && camState !== "ready" && <span style={{ fontSize: "0.75rem", opacity: 0.7 }}>Backend connected</span>}
-          </div>
+          <div className="camera-new-top"><strong>Device camera</strong>{camState === "ready" && <span className="live-status">Live</span>}{backendUp && camState !== "ready" && <span style={{ fontSize: "0.75rem", opacity: 0.7 }}>Backend connected</span>}</div>
           <div className="real-camera">
-            {camState === "ready" && (
-              <img
-                ref={imgRef}
-                id="live-stream"
-                src={`${streamUrl()}?t=${streamKey}`}
-                alt="Live annotated camera feed from AI backend"
-                style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-                onError={() => setStreamError("Live stream interrupted. The backend is still connected; retry the camera if needed.")}
-                onLoad={() => setStreamError("")}
-              />
-            )}
-            {camState !== "ready" && (
-              <div className="camera-state" role="status">
-                <AppIcon name="camera" />
-                <h2>{stateLabel[camState]}</h2>
-                <p>{stateHint[camState]}</p>
-                {(camState === "off" || camState === "error") && backendUp && (
-                  <button id="btn-start-camera" className="primary-button" disabled={startingRef.current} onClick={() => void handleStartCamera()}>
-                    {camState === "error" ? "Try again" : "Start AI camera"}
-                  </button>
-                )}
-                {camState === "starting" && (
-                  <p style={{ marginTop: "0.5rem", opacity: 0.7, fontSize: "0.85rem" }}>Waiting for camera to report ready…</p>
-                )}
-                {camState === "backend-down" && (
-                  <div style={{ marginTop: "0.75rem", display: "flex", flexDirection: "column", gap: "0.5rem", alignItems: "center" }}>
-                    <code style={{ fontSize: "0.8rem", opacity: 0.85, padding: "0.35rem 0.6rem", background: "rgba(0,0,0,0.3)", borderRadius: "6px" }}>
-                      cd D:\Sight_Companion; .\venv\Scripts\Activate.ps1; cd Backend; python app.py
-                    </code>
-                    <button className="primary-button" style={{ fontSize: "0.85rem", padding: "0.35rem 0.9rem" }}
-                      onClick={async () => {
-                        setCamState("checking")
-                        const s = await getBackendStatus()
-                        if (s) { setBackendUp(true); applyStatus(s) } else { setBackendUp(false); setCamState("backend-down") }
-                      }}>
-                      Retry connection
-                    </button>
-                  </div>
-                )}
-                {camState === "checking" && (
-                  <p style={{ marginTop: "0.5rem", opacity: 0.7, fontSize: "0.85rem" }}>Checking API…</p>
-                )}
-              </div>
-            )}
+            <video ref={videoRef} playsInline muted aria-label="Live camera preview" />
+            <canvas ref={canvasRef} className="detection-overlay" aria-hidden="true" />
+            {camState !== "ready" && <div className="camera-state" role="status"><AppIcon name="camera" /><h2>{stateLabel[camState]}</h2><p>{camError || (camState === "backend-down" ? `Cannot reach ${getApiBase()}.` : "Your browser camera stays on this device. Start it when you are ready.")}</p>{(camState === "off" || camState === "error" || camState === "backend-down") && <button className="primary-button" onClick={() => void handleStartCamera()}>{camState === "error" ? "Try again" : "Start device camera"}</button>}</div>}
           </div>
-          <div className="camera-action-row">
-            {camState === "ready" ? (
-              <button id="btn-stop-camera" className="secondary-button" onClick={() => void handleStopCamera()}>Turn camera off</button>
-            ) : null}
-            <button id="btn-speech-toggle" className="secondary-button" onClick={() => void handleSpeechToggle()} title={speechOn ? "Mute backend voice" : "Unmute backend voice"}>
-              <AppIcon name="volume" /> {speechOn ? "Mute" : "Unmute"}
-            </button>
-          </div>
+          <div className="camera-action-row">{camState === "ready" && <><button className="secondary-button" onClick={() => void handleStopCamera()}>Turn camera off</button><button className="secondary-button" onClick={() => void handleSwitchCamera()}>Switch camera</button></>}{<button className="secondary-button" onClick={() => void handleSpeechToggle()}><AppIcon name="volume" /> {speechOn ? "Mute guidance" : "Unmute guidance"}</button>}</div>{frameError && <p className="camera-error-text" role="alert">{frameError}</p>}
         </section>
-
-        <aside className="lumi-panel">
-
-          {/* Lumi panel header */}
-          <div className="lumi-panel-header">
-            <div className="lumi-panel-title">
-              <div className="lumi-avatar">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-                  <path d="M12 22C6.477 22 2 17.523 2 12S6.477 2 12 2s10 4.477 10 10-4.477 10-10 10z"/>
-                  <path d="M8 12s1.5 2 4 2 4-2 4-2M9 9h.01M15 9h.01"/>
-                </svg>
-              </div>
-              <div>
-                <p className="lumi-panel-name">Lumi</p>
-                <p className="lumi-panel-sub">AI Vision Assistant</p>
-              </div>
-            </div>
-          </div>
-
-          {/* Detection summary strip */}
-          <div className={`lumi-detection-strip${detections.length === 0 ? " lumi-detection-empty" : ""}`}>
-            {detections.length === 0 ? (
-              <span className="lumi-det-label">
-                {camState === "ready" ? "Scanning environment..." : "Camera offline"}
-              </span>
-            ) : (
-              <>
-                <span className="lumi-det-label">Lumi sees</span>
-                <div className="lumi-det-tags">
-                  {detections.slice(0, 4).map((item) => (
-                    <span key={item.label + item.direction} className={`lumi-det-tag lumi-det-${item.level}`}>
-                      {item.label}
-                    </span>
-                  ))}
-                  {detections.length > 4 && <span className="lumi-det-more">+{detections.length - 4}</span>}
-                </div>
-                {detections[0]?.level === "danger" && (
-                  <span className="lumi-det-alert" aria-live="assertive">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true" width="13" height="13"><path d="M12 3 2 21h20z"/><path d="M12 9v5M12 17h.01"/></svg>
-                    {last}
-                  </span>
-                )}
-              </>
-            )}
-          </div>
-
-          {/* Chat panel */}
-          <LumiChatPanel camReady={camState === "ready"} compact />
-
-          {/* OCR section */}
-          <div className="lumi-ocr-section">
-            <button
-              id="btn-ocr-read"
-              className="lumi-ocr-btn"
-              onClick={() => void handleOcrRead()}
-              disabled={ocrLoading || camState !== "ready"}
-            >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                <rect x="3" y="5" width="18" height="14" rx="2" /><path d="M7 9h10M7 12h6M7 15h8" />
-              </svg>
-              {ocrLoading ? "Reading text..." : "Read text in frame"}
-            </button>
-            {ocrError && <p className="lumi-ocr-error" role="alert">{ocrError}</p>}
-            {ocrResults.length > 0 && (
-              <div className="lumi-ocr-results">
-                {ocrResults.map((r, i) => (
-                  <div key={i} className="lumi-ocr-item">
-                    <span className="lumi-ocr-text">"{r.text}"</span>
-                    <span className="lumi-ocr-conf">{Math.round(r.confidence * 100)}%</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-        </aside>
+        <aside className="lumi-panel"><div className="lumi-panel-header"><div className="lumi-panel-title"><div className="lumi-avatar">L</div><div><p className="lumi-panel-name">Lumi</p><p className="lumi-panel-sub">AI Vision Assistant</p></div></div></div><div className={`lumi-detection-strip${detections.length === 0 ? " lumi-detection-empty" : ""}`}>{detections.length === 0 ? <span className="lumi-det-label">{camState === "ready" ? "Scanning environment…" : "Camera offline"}</span> : <><span className="lumi-det-label">Lumi sees</span><div className="lumi-det-tags">{detections.slice(0, 4).map((item) => <span key={item.label + item.direction} className={`lumi-det-tag lumi-det-${item.level}`}>{item.label}</span>)}</div></>}</div><LumiChatPanel camReady={camState === "ready"} compact /><div className="lumi-ocr-section"><button className="lumi-ocr-btn" onClick={() => void handleOcrRead()} disabled={ocrLoading || camState !== "ready"}><AppIcon name="ocr" />{ocrLoading ? "Reading text…" : "Read text in frame"}</button>{ocrError && <p className="lumi-ocr-error" role="alert">{ocrError}</p>}{ocrResults.map((r, i) => <div className="lumi-ocr-item" key={i}><span className="lumi-ocr-text">“{r.text}”</span><span className="lumi-ocr-conf">{Math.round(r.confidence * 100)}%</span></div>)}</div></aside>
       </div>
     </div>
   )
 }
-
-// â”€â”€â”€ AskPage â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 export function AskLumiPage() {
   const chatKey = "sight-companion:chats"
   const [messages, setMessages] = useState<Chat[]>(() => {
@@ -898,4 +693,3 @@ export function SettingsPage({ preferences, setPreferences, loading }: { prefere
     </div>
   )
 }
-
