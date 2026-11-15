@@ -1403,3 +1403,43 @@ html[data-contrast="high"] .lcp-bubble-lumi .lcp-bubble-text { background: #e8de
 .camera-action-row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }.camera-error-text { margin: 10px 0 0; color: #a33b46; font-weight: 800; font-size: 13px; }
 @media (max-width: 1050px) { .live-new-grid { grid-template-columns: 1fr; } }
 @media (max-width: 600px) { .real-camera { min-height: 390px; }.camera-new-top, .camera-action-row { align-items: stretch; flex-direction: column; }.camera-action-row .secondary-button { width: 100%; } }
+
+
+/* Mobile camera responsiveness fix */
+.live-new-grid,
+.camera-new,
+.lumi-panel,
+.real-camera { min-width: 0; max-width: 100%; }
+.real-camera { width: 100%; min-height: 0; aspect-ratio: 16 / 10; }
+.real-camera video,
+.real-camera .detection-overlay { width: 100%; height: 100%; inset: 0; }
+.camera-action-row { min-width: 0; }
+.camera-action-row > button { min-width: 0; flex: 1 1 150px; white-space: normal; }
+.lumi-panel { overflow: hidden; }
+
+@media (max-width: 899px) {
+  .live-new-grid { width: 100%; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .camera-new, .lumi-panel { width: 100%; }
+  .camera-new { padding: 14px; }
+  .camera-new-top { margin-bottom: 12px; }
+  .real-camera { aspect-ratio: 4 / 3; border-radius: 17px; }
+  .camera-action-row { flex-direction: row; flex-wrap: wrap; }
+  .camera-action-row > button { flex: 1 1 140px; }
+  .lumi-panel { max-height: none; }
+}
+
+@media (max-width: 560px) {
+  .page.tool-page { width: 100%; max-width: 100vw; padding-inline: 12px; overflow-x: hidden; }
+  .live-new-grid { gap: 12px; }
+  .camera-new { padding: 10px; border-radius: 18px; }
+  .camera-new-top { min-height: 46px; padding-inline: 4px; }
+  .real-camera { aspect-ratio: 1 / .82; min-height: 0; max-height: none; border-radius: 15px; }
+  .camera-state { width: 100%; padding: 20px 14px; }
+  .camera-state h2 { margin: 10px 0 4px; font-size: 20px; }
+  .camera-state p { max-width: 280px; margin: 0 0 14px; font-size: 14px; }
+  .camera-state .primary-button { width: min(100%, 240px); }
+  .camera-action-row { gap: 8px; margin-top: 10px; padding: 0; }
+  .camera-action-row > button { width: 100%; flex: 1 1 100%; min-height: 50px; }
+  .lumi-panel-header { min-width: 0; }
+  .lcp, .lumi-ocr-section { min-width: 0; }
+}
