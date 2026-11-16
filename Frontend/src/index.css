@@ -1,7 +1,6 @@
 @import "tailwindcss";
 
 :root {
-  color-scheme: light;
   font-family: "Trebuchet MS", "Segoe UI", sans-serif;
   color: #241936;
   background: #fffaf4;
@@ -1393,19 +1392,298 @@ html[data-contrast="high"] .camera-new {
 }
 html[data-contrast="high"] .lcp-bubble-you .lcp-bubble-text { background: #fce4ed; }
 html[data-contrast="high"] .lcp-bubble-lumi .lcp-bubble-text { background: #e8deff; }
+/* Browser camera layout used by the corrected LivePage. */
+.real-camera { min-height: 500px; position: relative; overflow: hidden; display: grid; place-items: center; border-radius: 22px; background: #2c2030; }
+.real-camera video, .real-camera .detection-overlay { width: 100%; height: 100%; position: absolute; inset: 0; object-fit: cover; }
+.real-camera video { z-index: 1; background: #2c2030; }
+.real-camera .detection-overlay { z-index: 3; pointer-events: none; }
+.camera-state { position: relative; z-index: 2; max-width: 520px; display: grid; justify-items: center; padding: 28px; color: white; text-align: center; }
+.camera-state svg { width: 48px; height: 48px; }.camera-state h2 { margin: 16px 0 4px; }.camera-state p { color: #fff; line-height: 1.55; }
+.camera-new { padding: 20px; }.camera-new-top { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 15px; }
+.camera-action-row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }.camera-error-text { margin: 10px 0 0; color: #a33b46; font-weight: 800; font-size: 13px; }
+@media (max-width: 1050px) { .live-new-grid { grid-template-columns: 1fr; } }
+@media (max-width: 600px) { .real-camera { min-height: 390px; }.camera-new-top, .camera-action-row { align-items: stretch; flex-direction: column; }.camera-action-row .secondary-button { width: 100%; } }
 
 
+/* Mobile camera responsiveness fix */
+.live-new-grid,
+.camera-new,
+.lumi-panel,
+.real-camera { min-width: 0; max-width: 100%; }
+.real-camera { width: 100%; min-height: 0; aspect-ratio: 16 / 10; }
+.real-camera video,
+.real-camera .detection-overlay { width: 100%; height: 100%; inset: 0; }
+.camera-action-row { min-width: 0; }
+.camera-action-row > button { min-width: 0; flex: 1 1 150px; white-space: normal; }
+.lumi-panel { overflow: hidden; }
+
+@media (max-width: 899px) {
+  .live-new-grid { width: 100%; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .camera-new, .lumi-panel { width: 100%; }
+  .camera-new { padding: 14px; }
+  .camera-new-top { margin-bottom: 12px; }
+  .real-camera { aspect-ratio: 4 / 3; border-radius: 17px; }
+  .camera-action-row { flex-direction: row; flex-wrap: wrap; }
+  .camera-action-row > button { flex: 1 1 140px; }
+  .lumi-panel { max-height: none; }
+}
+
+@media (max-width: 560px) {
+  .page.tool-page { width: 100%; max-width: 100vw; padding-inline: 12px; overflow-x: hidden; }
+  .live-new-grid { gap: 12px; }
+  .camera-new { padding: 10px; border-radius: 18px; }
+  .camera-new-top { min-height: 46px; padding-inline: 4px; }
+  .real-camera { aspect-ratio: 1 / .82; min-height: 0; max-height: none; border-radius: 15px; }
+  .camera-state { width: 100%; padding: 20px 14px; }
+  .camera-state h2 { margin: 10px 0 4px; font-size: 20px; }
+  .camera-state p { max-width: 280px; margin: 0 0 14px; font-size: 14px; }
+  .camera-state .primary-button { width: min(100%, 240px); }
+  .camera-action-row { gap: 8px; margin-top: 10px; padding: 0; }
+  .camera-action-row > button { width: 100%; flex: 1 1 100%; min-height: 50px; }
+  .lumi-panel-header { min-width: 0; }
+  .lcp, .lumi-ocr-section { min-width: 0; }
+}
+
+
+/* Final responsive cleanup for every viewport */
+#root { width: 100%; min-width: 0; overflow-x: hidden; }
+.camera-action-row button svg,
+.camera-action-row button > svg {
+  width: 24px !important;
+  height: 24px !important;
+  min-width: 24px;
+  max-width: 24px;
+  flex: 0 0 24px;
+  display: inline-block;
+}
+.camera-action-row button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+}
+.real-camera .detection-overlay {
+  position: absolute;
+  z-index: 3;
+  pointer-events: none;
+  object-fit: fill;
+}
+
+@media (min-width: 1400px) {
+  .live-new-grid { grid-template-columns: minmax(0, 1.45fr) minmax(380px, .75fr); }
+  .real-camera { min-height: clamp(500px, 45vw, 680px); }
+}
+
+@media (min-width: 901px) and (max-width: 1199px) {
+  .app-shell { grid-template-columns: 220px minmax(0, 1fr); }
+  .sidebar { width: 220px; padding-inline: 15px; }
+  .page { padding-inline: 24px; }
+  .live-new-grid { grid-template-columns: minmax(0, 1fr); }
+  .real-camera { aspect-ratio: 16 / 10; min-height: 0; }
+}
+
+@media (max-width: 900px) {
+  .account-bar { min-height: 62px; }
+  .tool-page { padding-top: 16px; }
+  .tool-head { margin-bottom: 14px; }
+  .live-new-grid { grid-template-columns: minmax(0, 1fr); }
+  .real-camera { min-height: 0; aspect-ratio: 4 / 3; }
+  .lumi-panel { min-height: 0; }
+}
+
+@media (max-width: 480px) {
+  html { font-size: 16px; }
+  .page { padding-inline: 10px; }
+  .account-bar { padding-inline: 10px; }
+  .account-bar > button { max-width: 70%; }
+  .tool-head { padding: 18px 16px; border-radius: 20px; }
+  .tool-head h1 { font-size: clamp(30px, 10vw, 36px); }
+  .tool-head p { font-size: 14px; }
+  .real-camera { aspect-ratio: 4 / 3; border-radius: 14px; }
+  .camera-state { padding: 18px 12px; }
+  .camera-state svg { width: 38px; height: 38px; }
+  .camera-state h2 { font-size: 19px; }
+  .camera-state p { font-size: 13px; }
+  .camera-action-row { display: grid; grid-template-columns: 1fr; gap: 8px; padding: 10px; }
+  .camera-action-row button { width: 100%; height: auto; min-height: 48px; padding-inline: 12px; }
+  .lumi-panel-header { padding-inline: 13px; }
+  .lumi-detection-strip { padding-inline: 13px; }
+}
+
+
+/* FINAL camera layout: this block intentionally overrides older responsive rules. */
+.live-new-grid {
+  width: 100% !important;
+  min-width: 0 !important;
+  grid-template-columns: minmax(0, 1.45fr) minmax(300px, .75fr) !important;
+  align-items: start !important;
+}
+.camera-new,
+.lumi-panel {
+  min-width: 0 !important;
+  width: 100% !important;
+  max-width: 100% !important;
+}
+.real-camera {
+  width: 100% !important;
+  height: auto !important;
+  min-height: 0 !important;
+  aspect-ratio: 16 / 10 !important;
+  overflow: hidden !important;
+  position: relative !important;
+}
+.real-camera video,
+.real-camera img,
+.real-camera canvas,
+.real-camera .detection-overlay {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  max-width: none !important;
+  object-fit: cover !important;
+}
+.camera-action-row {
+  width: 100% !important;
+  display: flex !important;
+  flex-wrap: wrap !important;
+  align-items: center !important;
+  min-width: 0 !important;
+}
+.camera-action-row button {
+  width: auto !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  min-height: 48px !important;
+  height: auto !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 8px !important;
+}
+.camera-action-row button svg,
+.camera-action-row button > svg {
+  width: 24px !important;
+  height: 24px !important;
+  min-width: 24px !important;
+  max-width: 24px !important;
+  flex: 0 0 24px !important;
+}
+
+@media (max-width: 1100px) {
+  .live-new-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+  .real-camera { aspect-ratio: 16 / 10 !important; }
+}
+
+@media (max-width: 700px) {
+  .page.tool-page { width: 100% !important; max-width: 100vw !important; padding-inline: 12px !important; overflow-x: hidden !important; }
+  .live-new-grid { gap: 14px !important; }
+  .camera-new { padding: 12px !important; }
+  .real-camera { aspect-ratio: 4 / 3 !important; border-radius: 16px !important; }
+  .lumi-panel { min-height: 0 !important; }
+  .camera-action-row { display: grid !important; grid-template-columns: 1fr 1fr !important; gap: 8px !important; padding: 10px !important; }
+  .camera-action-row button { width: 100% !important; }
+}
+
+@media (max-width: 420px) {
+  .page.tool-page { padding-inline: 8px !important; }
+  .camera-new { padding: 8px !important; }
+  .real-camera { aspect-ratio: 1 / .86 !important; border-radius: 13px !important; }
+  .camera-action-row { grid-template-columns: 1fr !important; padding: 8px !important; }
+  .camera-action-row button { min-height: 50px !important; }
+}
+
+
+/* Final mobile icon sizing for More pages */
 @media (max-width: 720px) {
-  /* More-page icon safety cap. Do not constrain Lumi mascots or camera-state artwork. */
-  .app-main .sign-card svg,
-  .app-main .safety-levels svg,
-  .app-main .settings-form svg,
-  .app-main .profile-new svg,
-  .app-main .activity-combined svg,
-  .app-main .profile-menu svg,
-  .app-shell .more-sheet svg,
-  .app-shell .mobile-navigation svg {
-    max-width: 28px !important;
-    max-height: 28px !important;
+  .sign-card svg,
+  .sign-card button > svg,
+  .safety-levels article > svg,
+  .future-sensors article > svg,
+  .settings-form svg,
+  .profile-new svg,
+  .profile-menu svg,
+  .public-icon svg {
+    width: 22px !important;
+    height: 22px !important;
+    min-width: 22px !important;
+    max-width: 22px !important;
+    flex: 0 0 22px !important;
+  }
+
+  .sign-card button,
+  .profile-links button,
+  .profile-menu button {
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+
+  .safety-levels article > svg {
+    margin-bottom: 8px !important;
+  }
+
+  .future-sensors article {
+    min-width: 0;
+    gap: 10px;
+    padding: 12px;
+  }
+
+  .future-sensors article > div,
+  .sign-card h2,
+  .profile-new,
+  .profile-menu {
+    min-width: 0;
+  }
+
+  .profile-photo {
+    width: 64px !important;
+    height: 64px !important;
+    border-radius: 18px !important;
+    font-size: 22px !important;
+  }
+}
+
+@media (max-width: 420px) {
+  .sign-card svg,
+  .sign-card button > svg,
+  .safety-levels article > svg,
+  .future-sensors article > svg,
+  .settings-form svg,
+  .profile-new svg,
+  .profile-menu svg,
+  .public-icon svg {
+    width: 19px !important;
+    height: 19px !important;
+    min-width: 19px !important;
+    max-width: 19px !important;
+    flex-basis: 19px !important;
+  }
+
+  .sign-card button {
+    min-height: 46px !important;
+    padding-inline: 10px !important;
+    gap: 6px !important;
+    font-size: 13px !important;
+  }
+
+  .safety-levels article,
+  .settings-form,
+  .future-sensors {
+    min-width: 0;
+  }
+}
+:root { color-scheme: light only; }
+
+@media (max-width: 899px) {
+  .app-main svg:not(.page-lumi):not(.lumi):not(.lumi-compact):not(.lumi-brand-mark svg) {
+    width: 24px !important;
+    height: 24px !important;
+    max-width: 24px !important;
+    max-height: 24px !important;
+    flex: 0 0 24px;
   }
 }
