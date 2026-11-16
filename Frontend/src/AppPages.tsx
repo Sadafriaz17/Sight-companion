@@ -51,7 +51,7 @@ function AppIcon({ name }: { name: IconName }) {
     ocr:     <><rect x="3" y="5" width="18" height="14" rx="2" /><path d="M7 9h10M7 12h6M7 15h8" /></>,
     refresh: <><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" /><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" /><path d="M3 21v-5h5" /></>,
   }
-  return <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">{paths[name]}</svg>
+  return <svg aria-hidden="true" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">{paths[name]}</svg>
 }
 function PageHead({ title, copy, mood = "happy" }: { title: string; copy: string; mood?: "happy" | "alert" | "listening" | "proud" }) {
   useEffect(() => speak(title), [title])
@@ -149,7 +149,7 @@ function LumiChatPanel({ camReady, compact }: { camReady: boolean; compact?: boo
         {messages.length === 0 && status !== "thinking" && (
           <div className="lcp-empty">
             <div className="lcp-empty-icon">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
                 <path d="M12 22C6.477 22 2 17.523 2 12S6.477 2 12 2s10 4.477 10 10-4.477 10-10 10z"/>
                 <path d="M8 12s1.5 2 4 2 4-2 4-2M9 9h.01M15 9h.01"/>
               </svg>
@@ -192,7 +192,7 @@ function LumiChatPanel({ camReady, compact }: { camReady: boolean; compact?: boo
           title={status === "listening" ? "Listening..." : "Tap to speak"}
           disabled={status === "thinking"}
         >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
             <rect x="9" y="3" width="6" height="12" rx="3" />
             <path d="M5 11a7 7 0 0 0 14 0M12 18v3" />
           </svg>
@@ -212,7 +212,7 @@ function LumiChatPanel({ camReady, compact }: { camReady: boolean; compact?: boo
           disabled={status === "thinking" || !text.trim()}
           aria-label="Send message"
         >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
             <path d="M22 2 11 13M22 2 15 22l-4-9-9-4 20-7z"/>
           </svg>
         </button>
@@ -222,7 +222,7 @@ function LumiChatPanel({ camReady, compact }: { camReady: boolean; compact?: boo
           aria-label="Stop speaking"
           title="Stop Lumi speaking"
         >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
             <rect x="6" y="6" width="12" height="12" rx="2" />
           </svg>
         </button>
@@ -504,7 +504,7 @@ export function LivePage() {
           <div className="lumi-panel-header">
             <div className="lumi-panel-title">
               <div className="lumi-avatar">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
                   <path d="M12 22C6.477 22 2 17.523 2 12S6.477 2 12 2s10 4.477 10 10-4.477 10-10 10z"/>
                   <path d="M8 12s1.5 2 4 2 4-2 4-2M9 9h.01M15 9h.01"/>
                 </svg>
@@ -554,7 +554,7 @@ export function LivePage() {
               onClick={() => void handleOcrRead()}
               disabled={ocrLoading || camState !== "ready"}
             >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
                 <rect x="3" y="5" width="18" height="14" rx="2" /><path d="M7 9h10M7 12h6M7 15h8" />
               </svg>
               {ocrLoading ? "Reading text..." : "Read text in frame"}
@@ -898,4 +898,3 @@ export function SettingsPage({ preferences, setPreferences, loading }: { prefere
     </div>
   )
 }
-

@@ -1,6 +1,7 @@
 @import "tailwindcss";
 
 :root {
+  color-scheme: light;
   font-family: "Trebuchet MS", "Segoe UI", sans-serif;
   color: #241936;
   background: #fffaf4;
@@ -1392,3 +1393,19 @@ html[data-contrast="high"] .camera-new {
 }
 html[data-contrast="high"] .lcp-bubble-you .lcp-bubble-text { background: #fce4ed; }
 html[data-contrast="high"] .lcp-bubble-lumi .lcp-bubble-text { background: #e8deff; }
+
+
+@media (max-width: 720px) {
+  /* More-page icon safety cap. Do not constrain Lumi mascots or camera-state artwork. */
+  .app-main .sign-card svg,
+  .app-main .safety-levels svg,
+  .app-main .settings-form svg,
+  .app-main .profile-new svg,
+  .app-main .activity-combined svg,
+  .app-main .profile-menu svg,
+  .app-shell .more-sheet svg,
+  .app-shell .mobile-navigation svg {
+    max-width: 28px !important;
+    max-height: 28px !important;
+  }
+}
