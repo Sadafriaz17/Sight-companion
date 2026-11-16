@@ -334,13 +334,8 @@ class _AIComponents:
             cls.speech_engine = _SpeechEngine()
             cls.initialised = True
             log.info("All AI components ready for fast object detection.")
-            if not cls._optional_warmup_started:
-                cls._optional_warmup_started = True
-                threading.Thread(
-                    target=_warm_optional_models,
-                    daemon=True,
-                    name="ai-optional-warmup",
-                ).start()
+            # Keep live mode focused on YOLO. Depth and OCR are loaded only
+            # when explicitly requested so they cannot steal CPU from frames.
             return True
 
 
@@ -883,8 +878,16 @@ def ocr_read():
     if not _state.camera_running:
         return _err("Camera is not running. Start it first.", 503)
 
-    if not _AIComponents.initialised or _AIComponents.ocr_reader is None:
-        return _err("OCR module is not available.", 503)
+    if not _AIComponents.initialised:
+        return _err("AI is not ready. Start the camera first.", 503)
+
+    if _AIComponents.ocr_reader is None:
+        try:
+            log.info("Loading OCR model on demand...")
+            _AIComponents.ocr_reader = _TextReader()
+        except Exception as exc:
+            log.warning("OCR load failed: %s", exc)
+            return _err("OCR module is not available.", 503)
 
     jpeg = _state.get_jpeg()
     if jpeg is None:

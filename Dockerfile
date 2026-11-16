@@ -52,9 +52,9 @@ COPY Sight-companion-ai/ ./Sight-companion-ai/
 # Use the model already present in the repository.
 # Download it if it is missing. Build fails if download fails.
 
-RUN test -f Sight-companion-ai/yolov8s.pt || \
-    wget -q -O Sight-companion-ai/yolov8s.pt \
-    "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8s.pt"
+RUN test -f Sight-companion-ai/yolov8n.pt || \
+    wget -q -O Sight-companion-ai/yolov8n.pt \
+    "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n.pt"
 
 # ============================================================================
 # 5. AI MODEL CACHE DIRECTORIES

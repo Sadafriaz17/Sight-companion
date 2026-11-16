@@ -3,7 +3,8 @@ import torch
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 # Model Paths & Setup
-YOLO_MODEL_PATH = "yolov8s.pt"
+# Faster CPU model for live blind-assistance detection on Render.
+YOLO_MODEL_PATH = "yolov8n.pt"
 DEPTH_MODEL_NAME = "LiheYoung/depth-anything-small-hf"
 
 # Detection & OCR Thresholds
