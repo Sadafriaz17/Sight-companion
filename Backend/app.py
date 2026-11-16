@@ -294,6 +294,7 @@ class _AIComponents:
     initialised: bool = False
     error: Optional[str] = None
     _init_lock = threading.Lock()
+    _optional_warmup_started = False
 
     @classmethod
     def initialise(cls) -> bool:
@@ -323,27 +324,43 @@ class _AIComponents:
                 log.error(cls.error)
                 return False
 
-            try:
-                log.info("Loading depth model (may download on first run)...")
-                cls.depth_estimator = _DepthEstimator()
-                log.info("Depth model loaded.")
-            except Exception as exc:
-                log.warning("Depth model failed to load: %s — depth will be skipped.", exc)
-                cls.depth_estimator = None
-
-            try:
-                log.info("Loading OCR model...")
-                cls.ocr_reader = _TextReader()
-                log.info("OCR model loaded.")
-            except Exception as exc:
-                log.warning("OCR model failed to load: %s — OCR will be skipped.", exc)
-                cls.ocr_reader = None
-
+            # Do not block the first camera frame on the large optional models.
+            # YOLO is enough to provide immediate object detections. Depth and
+            # OCR can download large model files on a fresh Render instance,
+            # so they warm up in the background after the API is ready.
+            cls.depth_estimator = None
+            cls.ocr_reader = None
             cls.nav_engine = _NavigationEngine()
             cls.speech_engine = _SpeechEngine()
             cls.initialised = True
-            log.info("All AI components ready.")
+            log.info("All AI components ready for fast object detection.")
+            if not cls._optional_warmup_started:
+                cls._optional_warmup_started = True
+                threading.Thread(
+                    target=_warm_optional_models,
+                    daemon=True,
+                    name="ai-optional-warmup",
+                ).start()
             return True
+
+
+def _warm_optional_models():
+    """Load depth/OCR without delaying the first YOLO detections."""
+    try:
+        log.info("Background warm-up: loading depth model...")
+        _AIComponents.depth_estimator = _DepthEstimator()
+        log.info("Background warm-up: depth model ready.")
+    except Exception as exc:
+        log.warning("Background depth warm-up failed; continuing without depth: %s", exc)
+        _AIComponents.depth_estimator = None
+
+    try:
+        log.info("Background warm-up: loading OCR model...")
+        _AIComponents.ocr_reader = _TextReader()
+        log.info("Background warm-up: OCR model ready.")
+    except Exception as exc:
+        log.warning("Background OCR warm-up failed; OCR remains unavailable: %s", exc)
+        _AIComponents.ocr_reader = None
 
 
 # ---------------------------------------------------------------------------
@@ -366,6 +383,8 @@ def _process_browser_frame(frame: np.ndarray, user_id: Optional[str], token: Opt
     """Run the existing AI pipeline on a JPEG frame submitted by the browser."""
     if not _AIComponents.initialise():
         raise RuntimeError(_AIComponents.error or "AI initialisation failed.")
+    _state.ai_ready = True
+    _state.ai_error = None
     height, width = frame.shape[:2]
     with _state.inference_lock:
         detections = _AIComponents.detector.detect(frame)
