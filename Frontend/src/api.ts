@@ -384,6 +384,8 @@ export async function getOcrHistory(limit = 50): Promise<unknown[]> {
  * Returns the authenticated user's activity log history from Supabase.
  */
 export async function getActivityHistory(limit = 50): Promise<unknown[]> {
+  const authSession = await supabase?.auth.getSession()
+  if (!authSession?.data?.session?.access_token) return []
   const data = await get<{ activity_log: unknown[] }>(`/api/activity-history?limit=${limit}`)
   return data?.activity_log ?? []
 }
