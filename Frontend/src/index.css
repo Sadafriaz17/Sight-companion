@@ -1676,3 +1676,14 @@ html[data-contrast="high"] .lcp-bubble-lumi .lcp-bubble-text { background: #e8de
     min-width: 0;
   }
 }
+:root { color-scheme: light only; }
+
+@media (max-width: 899px) {
+  .app-main svg:not(.page-lumi):not(.lumi):not(.lumi-compact):not(.lumi-brand-mark svg) {
+    width: 24px !important;
+    height: 24px !important;
+    max-width: 24px !important;
+    max-height: 24px !important;
+    flex: 0 0 24px;
+  }
+}
